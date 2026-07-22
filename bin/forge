@@ -1,0 +1,93 @@
+#!/usr/bin/env bash
+
+set -o errexit
+set -o nounset
+set -o pipefail
+
+SHIPYARD_HOME="${SHIPYARD_HOME:-$HOME/.config/shipyard}"
+
+# shellcheck source=../lib/pipeline.sh
+source "$SHIPYARD_HOME/lib/pipeline.sh"
+
+# shellcheck source=../lib/session.sh
+source "$SHIPYARD_HOME/lib/session.sh"
+
+forge_usage() {
+    cat <<'EOF'
+Shipyard coordinates AI-powered software development workflows.
+
+Usage:
+  forge open [path]   Open a project in tmux
+
+  forge plan          Mark the pipeline as planning
+  forge build         Mark the pipeline as building
+  forge wait          Mark the pipeline as waiting
+  forge review        Mark the pipeline as ready for review
+  forge check         Mark the pipeline as validating
+  forge alert         Mark the pipeline as needing attention
+  forge done          Mark the pipeline as complete
+  forge clear         Clear the pipeline state
+  forge status        Show the pipeline state
+
+  forge help          Show this help
+EOF
+}
+
+main() {
+    local command="${1:-help}"
+
+    case "$command" in
+        open)
+            shift
+            shipyard_open "${1:-.}"
+            ;;
+
+        plan)
+            pipeline_set planning
+            ;;
+
+        build)
+            pipeline_set building
+            ;;
+
+        wait)
+            pipeline_set waiting
+            ;;
+
+        review)
+            pipeline_set ready
+            ;;
+
+        check)
+            pipeline_set validating
+            ;;
+
+        alert)
+            pipeline_set attention
+            ;;
+
+        done)
+            pipeline_set complete
+            ;;
+
+        clear)
+            pipeline_clear
+            ;;
+
+        status)
+            pipeline_status
+            ;;
+
+        help|-h|--help)
+            forge_usage
+            ;;
+
+        *)
+            printf 'forge: unknown command: %s\n\n' "$command" >&2
+            forge_usage >&2
+            return 2
+            ;;
+    esac
+}
+
+main "$@"
