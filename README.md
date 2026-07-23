@@ -205,6 +205,7 @@ Responsible for:
 * pane titles
 * pipeline window names
 * prompt hooks
+* opening the `no-mistakes attach` pane for `forge check`
 
 It answers the question:
 
