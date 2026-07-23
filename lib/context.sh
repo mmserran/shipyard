@@ -1,5 +1,31 @@
 #!/usr/bin/env bash
 
+context_sync() {
+    if [[ -z "${TMUX:-}" ]]; then
+        printf 'forge: sync must run inside tmux\n' >&2
+        return 1
+    fi
+
+    shipyard_update_context
+    tmux refresh-client -S || true
+}
+
+context_open_no_mistakes_tui() {
+    [[ -n "${TMUX:-}" ]] || return 0
+    command -v no-mistakes >/dev/null 2>&1 || return 0
+
+    # Don't stack a second attach pane if one is already watching this run.
+    # pane_current_command reports the foreground interpreter (e.g. bash),
+    # not the script name, so tag the pane's title instead and match on that.
+    if tmux list-panes -F '#{pane_title}' | grep -qx 'no-mistakes'; then
+        return 0
+    fi
+
+    local pane_id
+    pane_id="$(tmux split-window -c "$PWD" -P -F '#{pane_id}' 'no-mistakes attach')" || return 0
+    tmux select-pane -t "$pane_id" -T 'no-mistakes' || true
+}
+
 shipyard_git_context() {
     git rev-parse --is-inside-work-tree >/dev/null 2>&1
 }
