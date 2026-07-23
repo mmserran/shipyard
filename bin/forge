@@ -27,7 +27,7 @@ Usage:
   forge build         Mark the pipeline as building
   forge wait          Mark the pipeline as waiting
   forge review        Mark the pipeline as ready for review
-  forge check         Mark the pipeline as validating
+  forge check         Mark the pipeline as validating (opens no-mistakes attach)
   forge alert         Mark the pipeline as needing attention
   forge done          Mark the pipeline as complete
   forge clear         Clear the pipeline state
@@ -68,6 +68,7 @@ main() {
             ;;
 
         check)
+            context_open_no_mistakes_tui
             pipeline_set validating
             ;;
 

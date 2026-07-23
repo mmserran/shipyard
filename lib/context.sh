@@ -10,6 +10,18 @@ context_sync() {
     tmux refresh-client -S
 }
 
+context_open_no_mistakes_tui() {
+    [[ -n "${TMUX:-}" ]] || return 0
+    command -v no-mistakes >/dev/null 2>&1 || return 0
+
+    # Don't stack a second attach pane if one is already watching this run.
+    if tmux list-panes -F '#{pane_current_command}' | grep -qx 'no-mistakes'; then
+        return 0
+    fi
+
+    tmux split-window -c "$PWD" 'no-mistakes attach' || true
+}
+
 shipyard_git_context() {
     git rev-parse --is-inside-work-tree >/dev/null 2>&1
 }

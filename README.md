@@ -79,7 +79,7 @@ forge status
 | `forge build`  | Building (also runs `forge sync`) |
 | `forge wait`   | Waiting               |
 | `forge review` | Ready for review      |
-| `forge check`  | Validating            |
+| `forge check`  | Validating (also opens a `no-mistakes attach` pane) |
 | `forge alert`  | Needs attention       |
 | `forge done`   | Complete              |
 | `forge clear`  | Remove pipeline state |

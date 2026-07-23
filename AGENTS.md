@@ -35,19 +35,30 @@ forge build
 forge review
 # Implementation looks complete.
 
+no-mistakes axi run --yes --intent "..."
+# Start immediately, in the background — do not wait to be asked, and
+# do not pause for a human look at the diff first. axi run blocks
+# synchronously and can run for minutes (review, test, and CI steps),
+# so background it and read its output as it progresses. It runs its
+# own automated review, tests, lint, docs, and — if everything passes —
+# pushes and opens the PR.
+
 forge check
-# Immediately invoke the no-mistakes skill yourself — do not wait to
-# be asked, and do not pause for a human look at the diff first.
-# no-mistakes runs its own automated review, tests, lint, docs, and
-# — if everything passes — pushes and opens the PR.
+# Mark validating now that the run actually exists. This also opens a
+# `no-mistakes attach` pane so the run is visible live. Order matters
+# here: attach shows "no active run" and exits within a couple seconds
+# if nothing is running yet, so forge check must come after axi run
+# has started, never before.
 
 forge done      # no-mistakes passed; the PR is up.
 forge alert     # no-mistakes failed.
 ```
 
-`forge review` → `forge check` → running no-mistakes is one continuous move,
+`forge review` → start no-mistakes → `forge check` is one continuous move,
 not three separate decisions — treat reaching "implementation looks done" as
-the trigger for all of it.
+the trigger for all of it. Only the order of the last two is fixed (the run
+must exist before you call `forge check`); everything else follows
+immediately without waiting to be asked.
 
 If no-mistakes fails, `forge alert`, summarize the failure, and either fix it
 yourself or ask the user for direction if the fix isn't obvious. Once fixed:
@@ -73,7 +84,7 @@ looks stale (e.g. after a manual `git switch` outside of `forge build`).
 | You start discussing/designing an approach, before any code exists     | `forge plan`   |
 | You create the feature branch and start writing code                   | `forge build`  |
 | Your implementation looks complete                                     | `forge review` |
-| Right after `forge review`, immediately before running no-mistakes     | `forge check`  |
+| Right after starting `no-mistakes axi run` in the background           | `forge check`  |
 | no-mistakes passes (pushed, PR open)                                   | `forge done`   |
 | no-mistakes fails, or you're blocked and need a decision               | `forge alert`  |
 | You resume coding after a failure or feedback                          | `forge build`  |
