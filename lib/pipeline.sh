@@ -56,7 +56,7 @@ pipeline_set() {
 
     tmux set-option -w @pipeline_state "$state"
     tmux set-option -w @pipeline_badge "$badge"
-    tmux refresh-client -S
+    tmux refresh-client -S || true
 
     printf 'Pipeline state: %s\n' "$state"
 }
@@ -66,7 +66,7 @@ pipeline_clear() {
 
     tmux set-option -wu @pipeline_state 2>/dev/null || true
     tmux set-option -wu @pipeline_badge 2>/dev/null || true
-    tmux refresh-client -S
+    tmux refresh-client -S || true
 
     printf 'Pipeline state cleared\n'
 }
