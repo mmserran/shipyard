@@ -43,6 +43,20 @@ The project directory determines the tmux session name.
 
 ---
 
+## Context
+
+Refresh the pane title and window name from the current Git repository and branch.
+
+```bash
+forge sync
+```
+
+Useful after switching branches (`git switch -c feat/new-feature`) in a window whose
+name was set before the branch existed. `forge build` runs this automatically, so a
+freshly created feature branch is reflected in the window name as soon as work begins.
+
+---
+
 ## Pipeline
 
 Mark the current pipeline.
@@ -62,7 +76,7 @@ forge status
 | Command        | Pipeline State        |
 | -------------- | --------------------- |
 | `forge plan`   | Planning              |
-| `forge build`  | Building              |
+| `forge build`  | Building (also runs `forge sync`) |
 | `forge wait`   | Waiting               |
 | `forge review` | Ready for review      |
 | `forge check`  | Validating            |

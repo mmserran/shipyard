@@ -6,6 +6,9 @@ set -o pipefail
 
 SHIPYARD_HOME="${SHIPYARD_HOME:-$HOME/.config/shipyard}"
 
+# shellcheck source=../lib/context.sh
+source "$SHIPYARD_HOME/lib/context.sh"
+
 # shellcheck source=../lib/pipeline.sh
 source "$SHIPYARD_HOME/lib/pipeline.sh"
 
@@ -18,6 +21,7 @@ Shipyard coordinates AI-powered software development workflows.
 
 Usage:
   forge open [path]   Open a project in tmux
+  forge sync          Refresh window/pane context from Git
 
   forge plan          Mark the pipeline as planning
   forge build         Mark the pipeline as building
@@ -42,11 +46,16 @@ main() {
             shipyard_open "${1:-.}"
             ;;
 
+        sync)
+            context_sync
+            ;;
+
         plan)
             pipeline_set planning
             ;;
 
         build)
+            context_sync
             pipeline_set building
             ;;
 

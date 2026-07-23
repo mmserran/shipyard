@@ -1,5 +1,15 @@
 #!/usr/bin/env bash
 
+context_sync() {
+    if [[ -z "${TMUX:-}" ]]; then
+        printf 'forge: sync must run inside tmux\n' >&2
+        return 1
+    fi
+
+    shipyard_update_context
+    tmux refresh-client -S
+}
+
 shipyard_git_context() {
     git rev-parse --is-inside-work-tree >/dev/null 2>&1
 }

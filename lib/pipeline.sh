@@ -34,7 +34,7 @@ pipeline_badge_for() {
             ;;
 
         complete)
-            printf '✓'
+            printf '✓✓'
             ;;
 
         *)
