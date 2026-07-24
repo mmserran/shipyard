@@ -29,6 +29,34 @@ watcher_no_mistakes_status() {
     (cd "$worktree" && no-mistakes axi status 2>/dev/null) || true
 }
 
+# True once the agent has started working: the worktree has uncommitted
+# changes, or HEAD has moved past the commit it was leased at. Lets Shipyard
+# detect the planning -> building transition without the agent having to
+# call `forge build` itself.
+watcher_worktree_building() {
+    local window_id="$1"
+    local worktree="$2"
+    local base_head
+    local current_head
+
+    [[ -n "$(git -C "$worktree" status --porcelain 2>/dev/null)" ]] && return 0
+
+    base_head="$(tmux show-options -wqv -t "$window_id" @shipyard_base_head 2>/dev/null)"
+    [[ -n "$base_head" ]] || return 1
+    current_head="$(git -C "$worktree" rev-parse HEAD 2>/dev/null || true)"
+    [[ -n "$current_head" && "$current_head" != "$base_head" ]]
+}
+
+watcher_should_build() {
+    local window_id="$1"
+    local worktree="$2"
+    local current_state
+
+    current_state="$(tmux show-options -wqv -t "$window_id" @pipeline_state 2>/dev/null)"
+    [[ "$current_state" == "building" ]] ||
+        watcher_worktree_building "$window_id" "$worktree"
+}
+
 watcher_run() {
     local window_id="${1:-}"
     local worktree="${2:-}"
@@ -82,8 +110,12 @@ watcher_run() {
             fi
         elif [[ "$run_status" == "running" ]]; then
             watcher_apply_state "$window_id" validating
+        elif [[ "$manual_state" != "planning" && -n "$manual_state" ]]; then
+            watcher_apply_state "$window_id" "$manual_state"
+        elif watcher_should_build "$window_id" "$worktree"; then
+            watcher_apply_state "$window_id" building
         else
-            watcher_apply_state "$window_id" "${manual_state:-planning}"
+            watcher_apply_state "$window_id" planning
         fi
 
         sleep 10
