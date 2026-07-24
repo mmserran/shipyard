@@ -28,10 +28,18 @@ screenshot_publish() {
     done
 
     if ! gh release view "$SCREENSHOT_RELEASE_TAG" >/dev/null 2>&1; then
-        gh release create "$SCREENSHOT_RELEASE_TAG" \
+        local create_status
+        if gh release create "$SCREENSHOT_RELEASE_TAG" \
             --title "PR screenshot evidence" \
             --notes "Rolling storage for screenshots linked from PR descriptions. Not a versioned release; assets accumulate here, not in git history." \
-            --prerelease
+            --prerelease; then
+            :
+        else
+            create_status=$?
+            if ! gh release view "$SCREENSHOT_RELEASE_TAG" >/dev/null 2>&1; then
+                return "$create_status"
+            fi
+        fi
     fi
 
     local branch stamp tmpdir run_id repo
