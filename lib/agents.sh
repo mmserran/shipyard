@@ -11,11 +11,41 @@ agents_print_block() {
     printf '%s\n' "$AGENTS_BLOCK_END"
 }
 
+agents_has_valid_block() {
+    local project_agents="$1"
+
+    awk -v start="$AGENTS_BLOCK_START" -v end="$AGENTS_BLOCK_END" '
+        BEGIN {
+            valid = 1
+        }
+        $0 == start {
+            starts++
+            if (starts != 1 || in_block) {
+                valid = 0
+            }
+            in_block = 1
+            next
+        }
+        $0 == end {
+            ends++
+            if (ends != 1 || !in_block) {
+                valid = 0
+            }
+            in_block = 0
+        }
+        END {
+            exit !(valid && starts == 1 && ends == 1 && !in_block)
+        }
+    ' "$project_agents"
+}
+
 agents_replace_block() {
     local project_agents="$1"
     local source_agents="$2"
     local tmp
-    tmp="$(mktemp)"
+    tmp="$(mktemp "${project_agents}.tmp.XXXXXX")"
+    cp -p "$project_agents" "$tmp"
+    : >"$tmp"
 
     local in_block=0
     local line
@@ -61,7 +91,11 @@ agents_sync() {
         return
     fi
 
-    if grep -qxF "$AGENTS_BLOCK_START" "$project_agents"; then
+    if grep -qxF -e "$AGENTS_BLOCK_START" -e "$AGENTS_BLOCK_END" "$project_agents"; then
+        if ! agents_has_valid_block "$project_agents"; then
+            printf 'forge: invalid Shipyard block markers in %s\n' "$project_agents" >&2
+            return 1
+        fi
         agents_replace_block "$project_agents" "$source_agents"
     else
         {
