@@ -15,6 +15,9 @@ source "$SHIPYARD_HOME/lib/pipeline.sh"
 # shellcheck source=../lib/session.sh
 source "$SHIPYARD_HOME/lib/session.sh"
 
+# shellcheck source=../lib/screenshot.sh
+source "$SHIPYARD_HOME/lib/screenshot.sh"
+
 forge_usage() {
     cat <<'EOF'
 Shipyard coordinates AI-powered software development workflows.
@@ -22,6 +25,10 @@ Shipyard coordinates AI-powered software development workflows.
 Usage:
   forge open [path]   Open a project in tmux
   forge sync          Refresh window/pane context from Git
+
+  forge publish-screenshot <file> [<file> ...]
+                       Upload screenshot(s) to a rolling GitHub Release and
+                       print PR-ready markdown image links
 
   forge plan          Mark the pipeline as planning
   forge build         Mark the pipeline as building
@@ -48,6 +55,11 @@ main() {
 
         sync)
             context_sync
+            ;;
+
+        publish-screenshot)
+            shift
+            screenshot_publish "$@"
             ;;
 
         plan)

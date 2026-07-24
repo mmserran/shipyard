@@ -96,11 +96,43 @@ looks stale (e.g. after a manual `git switch` outside of `forge build`).
 | Right after starting `no-mistakes axi run` in the background           | `forge check`  |
 | no-mistakes passes (pushed, PR open)                                   | `forge done`   |
 | no-mistakes fails, or you're blocked and need a decision               | `forge alert`  |
+| You need to interrupt implementation with any question or confirmation prompt | `forge alert` |
 | You resume coding after a failure or feedback                          | `forge build`  |
 | The branch's context (repo/branch shown in window) looks wrong         | `forge sync`   |
 
 Don't call `forge wait` speculatively — it's for the user's own pauses in a
 pipeline, not something an agent needs to set.
+
+---
+
+## Screenshots in PRs
+
+A local file path (e.g. `artifacts/browser/after.png`) never renders in a
+GitHub PR description or comment — only a published, hosted URL does.
+`no-mistakes` authors the PR body from whatever it's given; it has no
+awareness of where your screenshots live, so a stale local path silently
+becomes a dead link in the PR.
+
+**Publish before invoking `no-mistakes`.** Run `forge publish-screenshot
+<file> [<file> ...]` and use the printed `![...](...)` markdown lines — not
+local artifact paths — in whatever commit message or task summary
+`no-mistakes` will draw the PR description from. This is the primary fix: it
+prevents a broken-link PR body from ever being generated, rather than
+requiring a later correction.
+
+```bash
+forge publish-screenshot artifacts/browser/after.png
+# ![after.png](https://github.com/.../releases/download/pr-screenshots/...)
+```
+
+**Safety net:** after `no-mistakes` creates or updates a PR, check the PR
+body/comments for lingering local artifact paths:
+
+```bash
+gh pr view <n> --json body,comments
+```
+
+Fix any that slipped through with `gh pr edit` / `gh pr comment`.
 
 ---
 
@@ -123,9 +155,15 @@ An agent must stop and wait for explicit user input at these points, even if
   extend to anything else: don't merge the PR, force-push, `git reset
   --hard`, delete branches, or close issues/PRs without being asked. Opening
   the PR is the workflow's job; deciding what happens to it is the user's.
-- **When blocked on a genuine decision** the user needs to make (ambiguous
-  requirements, a choice between approaches) — call `forge alert` and ask,
-  rather than guessing and continuing to `forge build`.
+- **Before any interactive prompt to the user** — a clarifying question,
+  confirmation before a risky/destructive action, an unexpected side effect
+  that needs a decision — call `forge alert` first, then ask. This covers
+  more than open-ended questions about requirements: it includes
+  tool-driven confirmation prompts too. The status bar should flip to
+  "needs attention" the moment you stop and wait, not only when the reason
+  is "ambiguous requirements." (This doesn't apply to the `forge plan` →
+  wait-for-"Approved" pause — that's an expected, named stopping point
+  already covered by the `planning` state, not an anomaly.)
 - **When no-mistakes fails for a reason you can't confidently fix** — call
   `forge alert`, explain what failed, and ask before retrying with a
   different approach.

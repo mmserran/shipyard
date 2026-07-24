@@ -57,6 +57,22 @@ freshly created feature branch is reflected in the window name as soon as work b
 
 ---
 
+## Screenshots
+
+Upload screenshot(s) to a rolling `pr-screenshots` GitHub Release (created on
+first use) and print a markdown image line per file, ready to paste into a PR
+description or comment.
+
+```bash
+forge publish-screenshot artifacts/browser/before.png artifacts/browser/after.png
+```
+
+Release assets live outside the git object database, so this never touches
+repo history or clone size. Requires an authenticated `gh` CLI and a GitHub
+remote on the current repository.
+
+---
+
 ## Pipeline
 
 Mark the current pipeline.
@@ -257,6 +273,22 @@ Responsible for:
 It answers the question:
 
 > "Which project am I working on?"
+
+---
+
+## lib/screenshot.sh
+
+Publishes screenshots so they render in a PR.
+
+Responsible for:
+
+* uploading to the rolling `pr-screenshots` GitHub Release
+* naming assets to avoid collisions across branches/runs
+* printing PR-ready markdown image links
+
+It answers the question:
+
+> "How do I get this image in front of a reviewer?"
 
 ---
 
