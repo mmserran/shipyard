@@ -104,6 +104,37 @@ pipeline, not something an agent needs to set.
 
 ---
 
+## Screenshots in PRs
+
+A local file path (e.g. `artifacts/browser/after.png`) never renders in a
+GitHub PR description or comment — only a published, hosted URL does.
+`no-mistakes` authors the PR body from whatever it's given; it has no
+awareness of where your screenshots live, so a stale local path silently
+becomes a dead link in the PR.
+
+**Publish before invoking `no-mistakes`.** Run `forge publish-screenshot
+<file> [<file> ...]` and use the printed `![...](...)` markdown lines — not
+local artifact paths — in whatever commit message or task summary
+`no-mistakes` will draw the PR description from. This is the primary fix: it
+prevents a broken-link PR body from ever being generated, rather than
+requiring a later correction.
+
+```bash
+forge publish-screenshot artifacts/browser/after.png
+# ![after.png](https://github.com/.../releases/download/pr-screenshots/...)
+```
+
+**Safety net:** after `no-mistakes` creates or updates a PR, check the PR
+body/comments for lingering local artifact paths:
+
+```bash
+gh pr view <n> --json body,comments
+```
+
+Fix any that slipped through with `gh pr edit` / `gh pr comment`.
+
+---
+
 ## Stopping points
 
 An agent must stop and wait for explicit user input at these points, even if
