@@ -15,6 +15,9 @@ source "$SHIPYARD_HOME/lib/pipeline.sh"
 # shellcheck source=../lib/session.sh
 source "$SHIPYARD_HOME/lib/session.sh"
 
+# shellcheck source=../lib/agents.sh
+source "$SHIPYARD_HOME/lib/agents.sh"
+
 # shellcheck source=../lib/screenshot.sh
 source "$SHIPYARD_HOME/lib/screenshot.sh"
 

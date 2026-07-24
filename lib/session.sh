@@ -37,6 +37,8 @@ shipyard_open() {
     project_root="$(shipyard_project_root "$requested_path")" || return
     session_name="$(shipyard_session_name "$project_root")"
 
+    agents_sync "$project_root"
+
     if ! command -v tmux >/dev/null 2>&1; then
         printf 'forge: tmux is not installed\n' >&2
         return 1

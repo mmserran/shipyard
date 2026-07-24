@@ -41,6 +41,10 @@ forge open ~/projects/my-app
 
 The project directory determines the tmux session name.
 
+Also ensures the project's `AGENTS.md` has Shipyard's forge workflow
+instructions, without touching any of the project's own content. See
+`lib/agents.sh` below.
+
 ---
 
 ## Context
@@ -289,6 +293,29 @@ Responsible for:
 It answers the question:
 
 > "How do I get this image in front of a reviewer?"
+
+---
+
+## lib/agents.sh
+
+Keeps a project's `AGENTS.md` in sync with Shipyard's forge workflow
+instructions.
+
+Responsible for:
+
+* creating `AGENTS.md` in a new project if none exists
+* appending Shipyard's instructions in a delimited block if a project
+  already has its own `AGENTS.md`
+* refreshing that block in place on later syncs, without touching the
+  rest of the file
+
+It answers the question:
+
+> "How does this project know about the forge workflow?"
+
+Shipyard's block is wrapped in `<!-- shipyard:start -->` /
+`<!-- shipyard:end -->` markers so a project's own `AGENTS.md` content is
+never overwritten. `forge open` calls this automatically.
 
 ---
 
