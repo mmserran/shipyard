@@ -22,7 +22,11 @@ shipyard_project_root() {
             /*) ;;
             *) common_dir="$resolved_path/$common_dir" ;;
         esac
-        (cd "$common_dir/.." && pwd -P)
+        if [[ "$(basename "$common_dir")" == ".git" ]]; then
+            (cd "$common_dir/.." && pwd -P)
+        else
+            (cd "$common_dir" && pwd -P)
+        fi
     else
         printf '%s\n' "$resolved_path"
     fi

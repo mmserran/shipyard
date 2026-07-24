@@ -221,6 +221,17 @@ reused_session="$(shipyard_session_for_project "$(shipyard_project_root "$linked
 assert_equal "worktree-repo" "$reused_session" \
     "forge new from inside a linked worktree reuses the project's existing session"
 
+bare_repo="$test_tmp/bare-repo.git"
+git init -q --bare "$bare_repo"
+git -C "$worktree_repo" remote add bare-test "$bare_repo"
+git -C "$worktree_repo" push -q bare-test HEAD:main
+bare_linked_worktree="$test_tmp/bare-repo-linked"
+git -C "$bare_repo" worktree add -q --detach "$bare_linked_worktree" main
+
+assert_equal "$(cd "$bare_repo" && pwd -P)" \
+    "$(shipyard_project_root "$bare_linked_worktree")" \
+    "a bare-backed linked worktree resolves to the bare repository"
+
 quoted_command="$(shipyard_watcher_command "@9" "/tmp/it's a worktree")"
 case "$quoted_command" in
     *"/tmp/it\\'s\\ a\\ worktree")
