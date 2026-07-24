@@ -32,12 +32,18 @@ forge new nav-header
 
 Shipyard:
 
-1. derives the project session from the repository name;
+1. resolves one project session identity shared by the repository and its
+   linked worktrees;
 2. leases a pre-warmed Treehouse worktree;
-3. creates an intent window rooted in that worktree;
-4. records enough lease identity for safe automatic cleanup;
-5. starts a state watcher; and
-6. opens an ordinary shell without starting an agent.
+3. refreshes that worktree to a detached checkout of the remote's current
+   default-branch tip when the remote is available;
+4. creates an intent window rooted in that worktree;
+5. records enough lease identity for safe automatic cleanup;
+6. starts a state watcher; and
+7. opens an ordinary shell without starting an agent.
+
+If the remote's default branch cannot be resolved or fetched, `forge new`
+warns and continues from the worktree's existing checkout.
 
 The first unit creates the project session directly. There is no permanent
 command window. Run the agent or development command of your choice from the
