@@ -43,6 +43,7 @@ screenshot_publish() {
         index=$((index + 1))
         base="$(basename "$file")"
         asset_name="${branch//\//-}-${stamp}-${index}-${base}"
+        asset_name="${asset_name//[^A-Za-z0-9._-]/-}"
         ln -s "$(realpath "$file")" "$tmpdir/$asset_name"
         gh release upload "$SCREENSHOT_RELEASE_TAG" "$tmpdir/$asset_name" >&2
         url="https://github.com/${repo}/releases/download/${SCREENSHOT_RELEASE_TAG}/${asset_name}"
