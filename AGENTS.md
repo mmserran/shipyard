@@ -6,7 +6,7 @@ Instructions for AI coding agents in a Shipyard-managed repository. See [README.
 
 Each Shipyard window starts in planning state (💡) via `forge new <intent>` (user-run). Title = user's intent; stays stable.
 
-**1. Plan and wait.** Investigate without modifying the repo. Use **Lavish** to present a plan. Do not branch, edit, or implement until the user says exactly "Approved" — a question, positive reaction, or silence doesn't count.
+**1. Plan and wait.** Investigate without modifying the repo. Use **Lavish** to present a plan. Do not branch, edit, or implement until the user says exactly "Approved" — a question, positive reaction, or silence doesn't count. This gate applies only when a user is present to respond, e.g. a `forge new` session. If you're driving an automated pipeline with no user present (such as a no-mistakes review/fix round), proceed directly without waiting for "Approved".
 
 **2. Build after approval.**
 ```bash
