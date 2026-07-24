@@ -1,104 +1,44 @@
 # AGENTS.md
 
-Instructions for AI coding agents working inside a repository managed by
-Shipyard. For setup and command reference, see [README.md](README.md).
+Instructions for AI coding agents in a Shipyard-managed repository. See [README.md](README.md) for setup/commands.
 
-## Workflow contract
+## Workflow
 
-Each Shipyard window is a unit of work created by the user with:
+Each Shipyard window starts in planning state (💡) via `forge new <intent>` (user-run). Title = user's intent; stays stable.
 
-```bash
-forge new <intent>
-```
+**1. Plan and wait.** Investigate without modifying the repo. Use **Lavish** to present a plan. Do not branch, edit, or implement until the user says exactly "Approved" — a question, positive reaction, or silence doesn't count.
 
-Shipyard creates the window in planning state (`💡`). The window title is the
-user's intent and must remain stable; the pane border reports repository and
-branch context independently.
-
-### 1. Plan and wait
-
-Investigate the request without modifying the repository. Use the **Lavish**
-skill to present a reviewable implementation plan.
-
-Do not create a branch, edit files, or begin implementation until the user says
-the exact word **"Approved"**. A question, positive reaction, or silence is not
-approval.
-
-### 2. Build only after approval
-
-After the user says "Approved":
-
+**2. Build after approval.**
 ```bash
 git fetch origin development
 git switch -c feat/new-feature origin/development
 forge build
 ```
+Always branch from latest `origin/development` (never `main`, detached HEAD, or another feature branch — worktrees start detached and local `development` may be checked out elsewhere). `forge build` moves state to building (●). Implement and verify the requested change. If blocked waiting on the user, call `forge alert` first.
 
-Create the feature branch from the latest remote `development`, never from
-`main`, a detached HEAD, or another feature branch. Treehouse worktrees begin
-detached, and a local `development` branch may be checked out by another
-worktree, so branch directly from `origin/development`. `forge build` moves the
-window from planning (`💡`) to building (`●`). Implement and verify the
-requested change.
+**3. Publish screenshots before the PR.** Before running no-mistakes, if PR text will mention local visual artifacts, use the **publish-screenshots** skill: `forge publish-screenshot artifacts/browser/after.png`. Use the returned hosted URL only — never `file://`, localhost, or workspace-relative links. After PR creation, check body/comments for any local links that slipped through.
 
-If you are blocked and must wait for the user, call `forge alert` before asking.
-This produces the red attention badge.
-
-### 3. Publish screenshots before the PR
-
-Use the **publish-screenshots** skill before invoking no-mistakes whenever
-local visual artifacts will be mentioned in PR-facing text. Local file links
-do not render for GitHub reviewers. Publish each artifact with:
-
+**4. Ship via no-mistakes.**
 ```bash
-forge publish-screenshot artifacts/browser/after.png
+no-mistakes axi run --yes --intent "<user's complete objective and decisions>"
 ```
+Run in background if needed. Shipyard auto-tracks state (⏳ validating → yellow ⚠ published → red ⚠ failed/blocked → ✓✓ merged) — don't narrate this manually. Never merge, close, or force-push the PR unless explicitly asked.
 
-Use the printed hosted Markdown URL, never an absolute path, `file://` URL,
-localhost URL, or workspace-relative screenshot link. After the PR is created,
-inspect its body and comments for local links and correct any that slipped
-through.
+## Forge commands
 
-### 4. Ship through no-mistakes
+| Command | When |
+|---|---|
+| `forge build` | Right after "Approved" |
+| `forge alert` | Before stopping for user input or reporting an unfixable failure |
+| `forge status` | Check intent/state/PR |
+| `forge publish-screenshot` | Before citing local visual evidence in PR text |
 
-When implementation is complete, immediately run:
+Shipyard (not the agent) owns worktree allocation, tmux windows, and state tracking.
 
-```bash
-no-mistakes axi run --yes --intent "<the user's complete objective and decisions>"
-```
+## Stop for user input when
 
-Run it in the background when necessary and continue reading its output.
-Shipyard observes no-mistakes and GitHub automatically:
+- plan is presented, before "Approved"
+- a genuine product decision is required
+- no-mistakes fails and you can't confidently fix it
 
-- `` — validation is running and no PR exists yet
-- yellow `⚠` — the PR has been published
-- red `⚠` — validation failed or the agent is blocked
-- `✓✓` — the PR was merged
-
-Do not manually narrate validation, publication, or merge state with forge
-commands. Do not merge, close, or force-push the PR unless the user explicitly
-asks.
-
-## Agent-facing forge commands
-
-| Command | When to use it |
-| --- | --- |
-| `forge build` | Immediately after the user says "Approved" |
-| `forge alert` | Before stopping for a user decision or reporting an unfixable failure |
-| `forge status` | To inspect the current intent, state, and PR |
-| `forge publish-screenshot ...` | Before including local visual evidence in PR-facing text |
-
-`forge new` is a user command. Shipyard owns worktree allocation, tmux window
-creation, automatic state observation, and worktree return when the window is
-closed.
-
-## Stopping points
-
-Stop for explicit user input:
-
-- after presenting the Lavish plan and before "Approved";
-- when requirements require a genuine product decision;
-- when no-mistakes fails for a reason you cannot confidently fix.
-
-No-mistakes validation, push, and PR creation are pre-authorized. Merging the PR
-is not.
+No-mistakes validation/push/PR-creation are pre-authorized; merging is not.
