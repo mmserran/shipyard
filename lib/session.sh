@@ -3,14 +3,26 @@
 shipyard_project_root() {
     local requested_path="$1"
     local resolved_path
+    local common_dir
 
     if ! resolved_path="$(cd "$requested_path" 2>/dev/null && pwd -P)"; then
         printf 'forge: directory not found: %s\n' "$requested_path" >&2
         return 1
     fi
 
-    if git -C "$resolved_path" rev-parse --show-toplevel >/dev/null 2>&1; then
-        git -C "$resolved_path" rev-parse --show-toplevel
+    # Resolve through the shared git-common-dir rather than --show-toplevel:
+    # every worktree of a repository (including Treehouse-leased ones) shares
+    # one common-dir, so this keeps forge new landing in the same tmux
+    # session regardless of which worktree it's invoked from. --show-toplevel
+    # would instead return each worktree's own directory, so running forge
+    # new from inside an already-leased worktree would fail to recognize the
+    # project and spin up a colliding new session.
+    if common_dir="$(git -C "$resolved_path" rev-parse --git-common-dir 2>/dev/null)"; then
+        case "$common_dir" in
+            /*) ;;
+            *) common_dir="$resolved_path/$common_dir" ;;
+        esac
+        (cd "$common_dir/.." && pwd -P)
     else
         printf '%s\n' "$resolved_path"
     fi

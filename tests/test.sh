@@ -204,6 +204,23 @@ case "$collision_session" in
         ;;
 esac
 
+worktree_repo="$test_tmp/worktree-repo"
+git init -q "$worktree_repo"
+git -C "$worktree_repo" -c user.email=test@example.com -c user.name=test \
+    commit -q --allow-empty -m initial
+linked_worktree="$test_tmp/worktree-repo-linked"
+git -C "$worktree_repo" worktree add -q --detach "$linked_worktree"
+
+assert_equal "$(shipyard_project_root "$worktree_repo")" \
+    "$(shipyard_project_root "$linked_worktree")" \
+    "a linked worktree resolves to the same project root as its main checkout"
+
+tmux new-session -d -s worktree-repo -n main
+tmux set-option -t worktree-repo @shipyard_project_root "$(shipyard_project_root "$worktree_repo")"
+reused_session="$(shipyard_session_for_project "$(shipyard_project_root "$linked_worktree")")"
+assert_equal "worktree-repo" "$reused_session" \
+    "forge new from inside a linked worktree reuses the project's existing session"
+
 quoted_command="$(shipyard_watcher_command "@9" "/tmp/it's a worktree")"
 case "$quoted_command" in
     *"/tmp/it\\'s\\ a\\ worktree")
@@ -229,7 +246,7 @@ assert_equal "bash" \
     "$(tmux display-message -p -t "$intent_window" '#{pane_current_command}')" \
     "forge new starts a shell rather than an agent"
 intent_session="$(tmux display-message -p -t "$intent_window" '#{session_name}')"
-assert_equal "$repo_root" \
+assert_equal "$(shipyard_project_root "$repo_root")" \
     "$(tmux show-options -qv -t "$intent_session" @shipyard_project_root)" \
     "session records its canonical repository"
 case "$watcher_launch" in
