@@ -1,81 +1,52 @@
 #!/usr/bin/env bash
 
-context_sync() {
-    if [[ -z "${TMUX:-}" ]]; then
-        printf 'forge: sync must run inside tmux\n' >&2
-        return 1
-    fi
-
-    shipyard_update_context
-    tmux refresh-client -S || true
-}
-
-context_open_no_mistakes_tui() {
-    [[ -n "${TMUX:-}" ]] || return 0
-    command -v no-mistakes >/dev/null 2>&1 || return 0
-
-    # Don't stack a second attach pane if one is already watching this run.
-    # pane_current_command reports the foreground interpreter (e.g. bash),
-    # not the script name, so tag the pane's title instead and match on that.
-    if tmux list-panes -F '#{pane_title}' | grep -qx 'no-mistakes'; then
-        return 0
-    fi
-
-    local pane_id
-    pane_id="$(tmux split-window -h -c "$PWD" -P -F '#{pane_id}' 'no-mistakes attach')" || return 0
-    tmux select-pane -t "$pane_id" -T 'no-mistakes' || true
-}
-
 shipyard_git_context() {
-    git rev-parse --is-inside-work-tree >/dev/null 2>&1
+    git -C "${1:-$PWD}" rev-parse --is-inside-work-tree >/dev/null 2>&1
 }
 
 shipyard_repo_name() {
-    basename "$(git rev-parse --show-toplevel)"
+    basename "$(git -C "${1:-$PWD}" rev-parse --show-toplevel)"
 }
 
 shipyard_branch_name() {
-    git branch --show-current 2>/dev/null
+    git -C "${1:-$PWD}" branch --show-current 2>/dev/null
+}
+
+shipyard_context_for_path() {
+    local path="$1"
+    local repo
+    local branch
+
+    if shipyard_git_context "$path"; then
+        repo="$(shipyard_repo_name "$path")"
+        branch="$(shipyard_branch_name "$path")"
+        printf '%s  %s' "$repo" "${branch:-detached}"
+    else
+        basename "$path"
+    fi
 }
 
 shipyard_update_context() {
     [[ -n "${TMUX:-}" ]] || return 0
 
-    local role
-    local repo
-    local branch
     local pane_title
-    local window_name
+    pane_title="$(shipyard_context_for_path "$PWD")"
 
-    if shipyard_git_context; then
-        repo="$(shipyard_repo_name)"
-        branch="$(shipyard_branch_name)"
-
-        if [[ -n "$branch" ]]; then
-            pane_title="$repo  $branch"
-            window_name="$branch"
-        else
-            pane_title="$repo  detached"
-            window_name="plan:$repo"
-        fi
-    else
-        repo="$(basename "$PWD")"
-        pane_title="$repo"
-        window_name="$repo"
-    fi
-
-    # The terminal title is scoped to the current pane.
     printf '\033]2;%s\033\\' "$pane_title"
+    tmux set-option -pq @shipyard_context "$pane_title"
+}
 
-    # The command window retains its permanent identity.
-    role="$(tmux show-options -wqv @shipyard_role)"
+shipyard_refresh_window_context() {
+    local window_id="$1"
+    local pane_id
+    local path
+    local pane_title
 
-    if [[ "$role" == "command" ]]; then
-        return 0
-    fi
-
-    # The window represents the current pipeline.
-    tmux rename-window "$window_name"
+    while IFS='|' read -r pane_id path; do
+        [[ -n "$pane_id" && -n "$path" ]] || continue
+        pane_title="$(shipyard_context_for_path "$path")"
+        tmux set-option -pq -t "$pane_id" @shipyard_context "$pane_title"
+    done < <(tmux list-panes -t "$window_id" -F '#{pane_id}|#{pane_current_path}' 2>/dev/null)
 }
 
 shipyard_install_prompt_hook() {

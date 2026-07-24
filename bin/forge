@@ -15,6 +15,9 @@ source "$SHIPYARD_HOME/lib/pipeline.sh"
 # shellcheck source=../lib/session.sh
 source "$SHIPYARD_HOME/lib/session.sh"
 
+# shellcheck source=../lib/watcher.sh
+source "$SHIPYARD_HOME/lib/watcher.sh"
+
 # shellcheck source=../lib/screenshot.sh
 source "$SHIPYARD_HOME/lib/screenshot.sh"
 
@@ -23,21 +26,14 @@ forge_usage() {
 Shipyard coordinates AI-powered software development workflows.
 
 Usage:
-  forge open [path]   Open a project in tmux
-  forge sync          Refresh window/pane context from Git
+  forge new <intent>  Create an intent window in a leased Treehouse worktree
 
   forge publish-screenshot <file> [<file> ...]
                        Upload screenshot(s) to a rolling GitHub Release and
                        print PR-ready markdown image links
 
-  forge plan          Mark the pipeline as planning
   forge build         Mark the pipeline as building
-  forge wait          Mark the pipeline as waiting
-  forge review        Mark the pipeline as ready for review
-  forge check         Mark the pipeline as validating (opens no-mistakes attach)
   forge alert         Mark the pipeline as needing attention
-  forge done          Mark the pipeline as complete
-  forge clear         Clear the pipeline state
   forge status        Show the pipeline state
 
   forge help          Show this help
@@ -48,13 +44,9 @@ main() {
     local command="${1:-help}"
 
     case "$command" in
-        open)
+        new)
             shift
-            shipyard_open "${1:-.}"
-            ;;
-
-        sync)
-            context_sync
+            shipyard_new "$@"
             ;;
 
         publish-screenshot)
@@ -62,42 +54,30 @@ main() {
             screenshot_publish "$@"
             ;;
 
-        plan)
-            pipeline_set planning
-            ;;
-
         build)
-            context_sync
             pipeline_set building
-            ;;
-
-        wait)
-            pipeline_set waiting
-            ;;
-
-        review)
-            pipeline_set ready
-            ;;
-
-        check)
-            context_open_no_mistakes_tui
-            pipeline_set validating
             ;;
 
         alert)
             pipeline_set attention
             ;;
 
-        done)
-            pipeline_set complete
-            ;;
-
-        clear)
-            pipeline_clear
-            ;;
-
         status)
             pipeline_status
+            ;;
+
+        watch)
+            shift
+            watcher_run "$@"
+            ;;
+
+        reap)
+            shift
+            shipyard_reap "$@"
+            ;;
+
+        reconcile)
+            shipyard_reconcile
             ;;
 
         help|-h|--help)
