@@ -16,4 +16,11 @@ Use the Markdown URL this returns — not the local path — in any commit
 message or task summary that will become the PR description.
 
 After the PR is created, double-check that the PR body and comments don't
-contain local paths.
+contain local paths:
+
+```bash
+gh pr view <number> --json body,comments
+```
+
+Replace any local paths that slipped through with the published URLs using
+`gh pr edit` or `gh pr comment`.

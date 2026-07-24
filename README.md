@@ -42,8 +42,8 @@ forge open ~/projects/my-app
 The project directory determines the tmux session name.
 
 Also ensures the project's `AGENTS.md` has Shipyard's forge workflow
-instructions, without touching any of the project's own content. See
-`lib/agents.sh` below.
+instructions in a delimited block, without overwriting the project's own
+content. See `lib/agents.sh` below.
 
 ---
 
@@ -202,7 +202,7 @@ Think of this as Shipyard's public API.
 
 ---
 
-## init/bash.sh
+## shell/bash.sh
 
 Bootstraps Shipyard into Bash.
 
