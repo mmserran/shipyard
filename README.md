@@ -78,6 +78,11 @@ Building is detected from changes in the leased worktree. Blocking remains
 explicit; validation, publication, failure, and merge are observed from
 no-mistakes and GitHub.
 
+While a run is active, the window watcher also opens a side-by-side pane
+running `no-mistakes attach`, so a human can watch the TUI without leaving the
+window. The pane is left open after the run finishes; it's only reopened if it
+isn't already running (closed by hand, or its process exited).
+
 ## Pane and status context
 
 The status bar contains:

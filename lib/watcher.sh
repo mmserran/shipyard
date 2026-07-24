@@ -57,6 +57,24 @@ watcher_should_build() {
         watcher_worktree_building "$window_id" "$worktree"
 }
 
+# Checked by process name rather than a remembered pane id, so a pane the
+# human closed (or whose `no-mistakes attach` process exited on its own) is
+# correctly seen as gone and gets recreated on the next run.
+watcher_attach_pane_live() {
+    local window_id="$1"
+
+    tmux list-panes -t "$window_id" -F '#{pane_current_command}' 2>/dev/null |
+        grep -Fxq 'no-mistakes'
+}
+
+watcher_ensure_attach_pane() {
+    local window_id="$1"
+    local worktree="$2"
+
+    watcher_attach_pane_live "$window_id" && return 0
+    tmux split-window -h -t "$window_id" -c "$worktree" -- no-mistakes attach
+}
+
 watcher_run() {
     local window_id="${1:-}"
     local worktree="${2:-}"
@@ -110,6 +128,7 @@ watcher_run() {
             fi
         elif [[ "$run_status" == "running" ]]; then
             watcher_apply_state "$window_id" validating
+            watcher_ensure_attach_pane "$window_id" "$worktree"
         elif [[ "$manual_state" != "planning" && -n "$manual_state" ]]; then
             watcher_apply_state "$window_id" "$manual_state"
         elif watcher_should_build "$window_id" "$worktree"; then
