@@ -40,12 +40,14 @@ watcher_run() {
     local pr
     local pr_state
     local manual_state
+    local lock_cleanup
 
     [[ -n "$window_id" && -n "$worktree" ]] || return 2
     lock_dir="$(shipyard_state_home)/watch-${window_id}.lock"
     mkdir -p "$(shipyard_state_home)"
     mkdir "$lock_dir" 2>/dev/null || return 0
-    trap 'rmdir "$lock_dir" 2>/dev/null || true' EXIT
+    printf -v lock_cleanup 'rmdir %q 2>/dev/null || true' "$lock_dir"
+    trap "$lock_cleanup" EXIT
 
     while watcher_window_exists "$window_id"; do
         shipyard_refresh_window_context "$window_id"

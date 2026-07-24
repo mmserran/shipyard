@@ -28,6 +28,9 @@ source "$repo_root/lib/session.sh"
 source "$repo_root/lib/watcher.sh"
 
 tmux() {
+    if [[ "$1" == "run-shell" || "$1" == "switch-client" ]]; then
+        return 0
+    fi
     command tmux -L "$test_socket" "$@"
 }
 
@@ -66,15 +69,22 @@ assert_equal "https://example.test/pull/1" \
     "watcher records PR URL"
 
 shipyard_refresh_window_context "$window_id"
-assert_equal "shipyard  $(git -C "$repo_root" branch --show-current)" \
+expected_branch="$(git -C "$repo_root" branch --show-current)"
+expected_branch="${expected_branch:-detached}"
+assert_equal "$(basename "$repo_root")  $expected_branch" \
     "$(tmux show-options -pqv -t "$pane_id" @shipyard_context)" \
     "pane context contains repository and branch"
 
 returned_lease=""
 treehouse() {
-    if [[ "$1" == "return" ]]; then
-        returned_lease="$2|$4"
-    fi
+    case "$1" in
+        get)
+            printf '{"path":"%s","lease_id":"lease-new"}\n' "$repo_root"
+            ;;
+        return)
+            returned_lease="$2|$4"
+            ;;
+    esac
 }
 
 shipyard_record_lease "$window_id" "/tmp/test-worktree" "lease-123" "holder"
@@ -83,5 +93,45 @@ shipyard_reap "$window_id"
 assert_equal "/tmp/test-worktree|lease-123" \
     "$returned_lease" \
     "closed window returns exact lease"
+
+TMUX="test" shipyard_new "intent workflow"
+intent_window="$(tmux list-windows -a -F '#{window_name} #{window_id}' |
+    sed -n 's/^intent workflow //p')"
+assert_equal "intent workflow" \
+    "$(tmux display-message -p -t "$intent_window" '#{window_name}')" \
+    "forge new preserves the intent as the window title"
+assert_equal "💡" \
+    "$(tmux show-options -wqv -t "$intent_window" @pipeline_badge)" \
+    "forge new starts in planning"
+assert_equal "bash" \
+    "$(tmux display-message -p -t "$intent_window" '#{pane_current_command}')" \
+    "forge new starts a shell rather than an agent"
+
+watch_iterations=0
+watcher_window_exists() {
+    ((watch_iterations++ == 0))
+}
+watcher_no_mistakes_status() {
+    printf '  branch: "feat/intent-workflow"\n'
+    printf '  status: "complete"\n'
+    printf '  pr: "https://example.test/pull/2"\n'
+}
+git() {
+    if [[ "$1" == "-C" && "$3" == "branch" && "$4" == "--show-current" ]]; then
+        printf 'feat/intent-workflow\n'
+    else
+        command git "$@"
+    fi
+}
+gh() {
+    printf 'MERGED\n'
+}
+sleep() {
+    :
+}
+watcher_run "$intent_window" "$repo_root"
+assert_equal "merged" \
+    "$(tmux show-options -wqv -t "$intent_window" @pipeline_state)" \
+    "watcher observes a merged GitHub PR"
 
 printf 'all tests passed\n'
