@@ -30,7 +30,7 @@ screenshot_publish() {
     branch="$(git rev-parse --abbrev-ref HEAD)"
     stamp="$(date +%Y%m%d-%H%M%S)"
     tmpdir="$(mktemp -d)"
-    trap 'rm -rf "$tmpdir"' RETURN
+    trap 'rm -rf "$tmpdir"; trap - RETURN' RETURN
     repo="$(gh repo view --json nameWithOwner --jq '.nameWithOwner')"
 
     local index=0
