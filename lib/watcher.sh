@@ -57,6 +57,25 @@ watcher_should_build() {
         watcher_worktree_building "$window_id" "$worktree"
 }
 
+watcher_attach_pane_live() {
+    local window_id="$1"
+
+    tmux list-panes -t "$window_id" \
+        -F '#{@shipyard_attach_pane} #{pane_current_command}' 2>/dev/null |
+        grep -Fxq '1 no-mistakes'
+}
+
+watcher_ensure_attach_pane() {
+    local window_id="$1"
+    local worktree="$2"
+    local pane_id
+
+    watcher_attach_pane_live "$window_id" && return 0
+    pane_id="$(tmux split-window -h -P -F '#{pane_id}' -t "$window_id" \
+        -c "$worktree" -- no-mistakes attach)" || return
+    tmux set-option -p -t "$pane_id" @shipyard_attach_pane 1
+}
+
 watcher_run() {
     local window_id="${1:-}"
     local worktree="${2:-}"
@@ -110,6 +129,7 @@ watcher_run() {
             fi
         elif [[ "$run_status" == "running" ]]; then
             watcher_apply_state "$window_id" validating
+            watcher_ensure_attach_pane "$window_id" "$worktree"
         elif [[ "$manual_state" != "planning" && -n "$manual_state" ]]; then
             watcher_apply_state "$window_id" "$manual_state"
         elif watcher_should_build "$window_id" "$worktree"; then
