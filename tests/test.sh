@@ -28,8 +28,15 @@ source "$repo_root/lib/session.sh"
 source "$repo_root/lib/watcher.sh"
 
 tmux() {
-    if [[ "$1" == "run-shell" || "$1" == "switch-client" ]]; then
+    if [[ "$1" == "run-shell" ]]; then
+        watcher_launch="$3"
         return 0
+    fi
+    if [[ "$1" == "switch-client" ]]; then
+        return 0
+    fi
+    if [[ "${fail_new_window:-0}" -eq 1 && "$1" == "new-window" ]]; then
+        return 1
     fi
     command tmux -L "$test_socket" "$@"
 }
@@ -48,6 +55,7 @@ assert_equal() {
 }
 
 tmux new-session -d -s testrepo -n intent -c "$repo_root"
+tmux set-option -t testrepo @shipyard_project_root "$repo_root"
 window_id="$(tmux display-message -p '#{window_id}')"
 pane_id="$(tmux display-message -p '#{pane_id}')"
 
@@ -79,7 +87,11 @@ returned_lease=""
 treehouse() {
     case "$1" in
         get)
-            printf '{"path":"%s","lease_id":"lease-new"}\n' "$repo_root"
+            if [[ "${5:-}" == *"setup failure"* ]]; then
+                printf '{"path":"%s","lease_id":"lease-failure"}\n' "$repo_root"
+            else
+                printf '{"path":"%s","lease_id":"lease-new"}\n' "$repo_root"
+            fi
             ;;
         return)
             returned_lease="$2|$4"
@@ -94,6 +106,31 @@ assert_equal "/tmp/test-worktree|lease-123" \
     "$returned_lease" \
     "closed window returns exact lease"
 
+tmux new-session -d -s app -n existing
+tmux set-option -t app @shipyard_project_root "/client/app"
+collision_session="$(shipyard_session_for_project "/internal/app")"
+case "$collision_session" in
+    app-*)
+        printf 'ok - same-basename repositories use distinct sessions\n'
+        ;;
+    *)
+        printf 'not ok - same-basename repositories use distinct sessions\n' >&2
+        exit 1
+        ;;
+esac
+
+quoted_command="$(shipyard_watcher_command "@9" "/tmp/it's a worktree")"
+case "$quoted_command" in
+    *"/tmp/it\\'s\\ a\\ worktree")
+        printf 'ok - watcher command safely quotes shell metacharacters\n'
+        ;;
+    *)
+        printf 'not ok - watcher command safely quotes shell metacharacters\n%s\n' \
+            "$quoted_command" >&2
+        exit 1
+        ;;
+esac
+
 TMUX="test" shipyard_new "intent workflow"
 intent_window="$(tmux list-windows -a -F '#{window_name} #{window_id}' |
     sed -n 's/^intent workflow //p')"
@@ -106,6 +143,30 @@ assert_equal "💡" \
 assert_equal "bash" \
     "$(tmux display-message -p -t "$intent_window" '#{pane_current_command}')" \
     "forge new starts a shell rather than an agent"
+intent_session="$(tmux display-message -p -t "$intent_window" '#{session_name}')"
+assert_equal "$repo_root" \
+    "$(tmux show-options -qv -t "$intent_session" @shipyard_project_root)" \
+    "session records its canonical repository"
+case "$watcher_launch" in
+    *" watch "*)
+        printf 'ok - watcher launch is shell quoted\n'
+        ;;
+    *)
+        printf 'not ok - watcher launch is shell quoted\n%s\n' "$watcher_launch" >&2
+        exit 1
+        ;;
+esac
+
+returned_lease=""
+fail_new_window=1
+if TMUX="test" shipyard_new "setup failure"; then
+    printf 'not ok - failed tmux setup returns its pending lease\n' >&2
+    exit 1
+fi
+fail_new_window=0
+assert_equal "$repo_root|lease-failure" \
+    "$returned_lease" \
+    "failed tmux setup returns its pending lease"
 
 watch_iterations=0
 watcher_window_exists() {
