@@ -39,7 +39,16 @@ tmux() {
         return 1
     fi
     if [[ "$1" == "split-window" ]]; then
-        split_window_launch="$*"
+        printf '%s\n' "$*" > "$test_tmp/split-window"
+        printf '%%attach-test\n'
+        return 0
+    fi
+    if [[ "$1" == "set-option" && "$*" == *"@shipyard_attach_pane"* ]]; then
+        attach_pane_tag="$*"
+        return 0
+    fi
+    if [[ "$1" == "list-panes" && -n "${attach_pane_list:-}" ]]; then
+        printf '%s\n' "$attach_pane_list"
         return 0
     fi
     command tmux -L "$test_socket" "$@"
@@ -121,10 +130,12 @@ assert_equal "https://example.test/pull/1" \
     "$(tmux show-options -wqv @shipyard_pr)" \
     "watcher records PR URL"
 
-split_window_launch=""
+: > "$test_tmp/split-window"
+attach_pane_tag=""
 watcher_ensure_attach_pane "$window_id" "$repo_root"
+split_window_launch="$(<"$test_tmp/split-window")"
 case "$split_window_launch" in
-    *"-h"*"-t $window_id"*"$repo_root"*"no-mistakes attach")
+    *"-h"*"-P"*"-F #{pane_id}"*"-t $window_id"*"$repo_root"*"no-mistakes attach")
         printf 'ok - opens a side-by-side pane running no-mistakes attach\n'
         ;;
     *)
@@ -133,14 +144,31 @@ case "$split_window_launch" in
         exit 1
         ;;
 esac
+assert_equal "set-option -p -t %attach-test @shipyard_attach_pane 1" \
+    "$attach_pane_tag" \
+    "tags the watcher-created attach pane"
 
-split_window_launch=""
-watcher_attach_pane_live() { return 0; }
+: > "$test_tmp/split-window"
+attach_pane_list=" no-mistakes"
 watcher_ensure_attach_pane "$window_id" "$repo_root"
+split_window_launch="$(<"$test_tmp/split-window")"
+case "$split_window_launch" in
+    *"no-mistakes attach")
+        printf 'ok - ignores an untagged no-mistakes pane\n'
+        ;;
+    *)
+        printf 'not ok - ignores an untagged no-mistakes pane\n' >&2
+        exit 1
+        ;;
+esac
+
+: > "$test_tmp/split-window"
+attach_pane_list="1 no-mistakes"
+watcher_ensure_attach_pane "$window_id" "$repo_root"
+split_window_launch="$(<"$test_tmp/split-window")"
 assert_equal "" "$split_window_launch" \
     "does not reopen the attach pane while one is already live"
-# shellcheck source=../lib/watcher.sh
-source "$repo_root/lib/watcher.sh"
+unset attach_pane_list
 
 shipyard_refresh_window_context "$window_id"
 expected_branch="$(git -C "$repo_root" branch --show-current)"
@@ -338,12 +366,13 @@ watcher_no_mistakes_status() {
     printf '  branch: "feat/intent-workflow"\n'
     printf '  status: "running"\n'
 }
-split_window_launch=""
+: > "$test_tmp/split-window"
 # watcher_run's lock only releases on process exit (an EXIT trap), which
 # doesn't fire between calls made in the same test process; clear it by hand
 # so this second call doesn't find the lock still held from the one above.
 rmdir "$(shipyard_state_home)/watch-${intent_window}.lock" 2>/dev/null || true
 watcher_run "$intent_window" "$repo_root"
+split_window_launch="$(<"$test_tmp/split-window")"
 assert_equal "validating" \
     "$(tmux show-options -wqv -t "$intent_window" @pipeline_state)" \
     "watcher marks an active run as validating"
