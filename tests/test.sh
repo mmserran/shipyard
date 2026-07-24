@@ -124,6 +124,40 @@ assert_equal "$(basename "$repo_root")  $expected_branch" \
     "$(tmux show-options -pqv -t "$pane_id" @shipyard_context)" \
     "pane context contains repository and branch"
 
+sync_origin="$test_tmp/sync-origin"
+git init -q --bare "$sync_origin"
+
+sync_source="$test_tmp/sync-source"
+git init -q "$sync_source"
+git -C "$sync_source" -c user.email=test@example.com -c user.name=test \
+    commit -q --allow-empty -m old
+git -C "$sync_source" branch -M trunk
+git -C "$sync_source" remote add origin "$sync_origin"
+git -C "$sync_source" push -q origin trunk
+git -C "$sync_origin" symbolic-ref HEAD refs/heads/trunk
+
+sync_worktree="$test_tmp/sync-worktree"
+git clone -q "$sync_origin" "$sync_worktree"
+git -C "$sync_worktree" checkout -q --detach trunk
+
+detected_branch="$(shipyard_default_branch "$sync_worktree")"
+assert_equal "trunk" "$detected_branch" \
+    "default branch is resolved from the remote, not a cached symref"
+
+git -C "$sync_source" -c user.email=test@example.com -c user.name=test \
+    commit -q --allow-empty -m new
+git -C "$sync_source" push -q origin trunk
+fresh_head="$(git -C "$sync_source" rev-parse HEAD)"
+
+shipyard_sync_worktree "$sync_worktree" "$detected_branch"
+assert_equal "$fresh_head" "$(git -C "$sync_worktree" rev-parse HEAD)" \
+    "sync fast-forwards a stale worktree to the remote's tip"
+if git -C "$sync_worktree" symbolic-ref -q HEAD >/dev/null; then
+    printf 'not ok - synced worktree stays detached\n' >&2
+    exit 1
+fi
+printf 'ok - synced worktree stays detached\n'
+
 returned_lease=""
 treehouse() {
     case "$1" in
@@ -138,6 +172,16 @@ treehouse() {
             returned_lease="$2|$4"
             ;;
     esac
+}
+
+# shipyard_new below leases $repo_root itself as a stand-in worktree so tmux
+# assertions can inspect it; block the real sync's git mutations from running
+# against this actual checkout by making its remote lookup fail closed.
+git() {
+    if [[ "$1" == "-C" && "$3" == "ls-remote" ]]; then
+        return 1
+    fi
+    command git "$@"
 }
 
 shipyard_record_lease "$window_id" "/tmp/test-worktree" "lease-123" "holder"
@@ -159,6 +203,34 @@ case "$collision_session" in
         exit 1
         ;;
 esac
+
+worktree_repo="$test_tmp/worktree-repo"
+git init -q "$worktree_repo"
+git -C "$worktree_repo" -c user.email=test@example.com -c user.name=test \
+    commit -q --allow-empty -m initial
+linked_worktree="$test_tmp/worktree-repo-linked"
+git -C "$worktree_repo" worktree add -q --detach "$linked_worktree"
+
+assert_equal "$(shipyard_project_root "$worktree_repo")" \
+    "$(shipyard_project_root "$linked_worktree")" \
+    "a linked worktree resolves to the same project root as its main checkout"
+
+tmux new-session -d -s worktree-repo -n main
+tmux set-option -t worktree-repo @shipyard_project_root "$(shipyard_project_root "$worktree_repo")"
+reused_session="$(shipyard_session_for_project "$(shipyard_project_root "$linked_worktree")")"
+assert_equal "worktree-repo" "$reused_session" \
+    "forge new from inside a linked worktree reuses the project's existing session"
+
+bare_repo="$test_tmp/bare-repo.git"
+git init -q --bare "$bare_repo"
+git -C "$worktree_repo" remote add bare-test "$bare_repo"
+git -C "$worktree_repo" push -q bare-test HEAD:main
+bare_linked_worktree="$test_tmp/bare-repo-linked"
+git -C "$bare_repo" worktree add -q --detach "$bare_linked_worktree" main
+
+assert_equal "$(cd "$bare_repo" && pwd -P)" \
+    "$(shipyard_project_root "$bare_linked_worktree")" \
+    "a bare-backed linked worktree resolves to the bare repository"
 
 quoted_command="$(shipyard_watcher_command "@9" "/tmp/it's a worktree")"
 case "$quoted_command" in
@@ -185,7 +257,7 @@ assert_equal "bash" \
     "$(tmux display-message -p -t "$intent_window" '#{pane_current_command}')" \
     "forge new starts a shell rather than an agent"
 intent_session="$(tmux display-message -p -t "$intent_window" '#{session_name}')"
-assert_equal "$repo_root" \
+assert_equal "$(shipyard_project_root "$repo_root")" \
     "$(tmux show-options -qv -t "$intent_session" @shipyard_project_root)" \
     "session records its canonical repository"
 case "$watcher_launch" in
