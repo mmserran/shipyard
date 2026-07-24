@@ -124,6 +124,40 @@ assert_equal "$(basename "$repo_root")  $expected_branch" \
     "$(tmux show-options -pqv -t "$pane_id" @shipyard_context)" \
     "pane context contains repository and branch"
 
+sync_origin="$test_tmp/sync-origin"
+git init -q --bare "$sync_origin"
+
+sync_source="$test_tmp/sync-source"
+git init -q "$sync_source"
+git -C "$sync_source" -c user.email=test@example.com -c user.name=test \
+    commit -q --allow-empty -m old
+git -C "$sync_source" branch -M trunk
+git -C "$sync_source" remote add origin "$sync_origin"
+git -C "$sync_source" push -q origin trunk
+git -C "$sync_origin" symbolic-ref HEAD refs/heads/trunk
+
+sync_worktree="$test_tmp/sync-worktree"
+git clone -q "$sync_origin" "$sync_worktree"
+git -C "$sync_worktree" checkout -q --detach trunk
+
+detected_branch="$(shipyard_default_branch "$sync_worktree")"
+assert_equal "trunk" "$detected_branch" \
+    "default branch is resolved from the remote, not a cached symref"
+
+git -C "$sync_source" -c user.email=test@example.com -c user.name=test \
+    commit -q --allow-empty -m new
+git -C "$sync_source" push -q origin trunk
+fresh_head="$(git -C "$sync_source" rev-parse HEAD)"
+
+shipyard_sync_worktree "$sync_worktree" "$detected_branch"
+assert_equal "$fresh_head" "$(git -C "$sync_worktree" rev-parse HEAD)" \
+    "sync fast-forwards a stale worktree to the remote's tip"
+if git -C "$sync_worktree" symbolic-ref -q HEAD >/dev/null; then
+    printf 'not ok - synced worktree stays detached\n' >&2
+    exit 1
+fi
+printf 'ok - synced worktree stays detached\n'
+
 returned_lease=""
 treehouse() {
     case "$1" in
@@ -138,6 +172,16 @@ treehouse() {
             returned_lease="$2|$4"
             ;;
     esac
+}
+
+# shipyard_new below leases $repo_root itself as a stand-in worktree so tmux
+# assertions can inspect it; block the real sync's git mutations from running
+# against this actual checkout by making its remote lookup fail closed.
+git() {
+    if [[ "$1" == "-C" && "$3" == "ls-remote" ]]; then
+        return 1
+    fi
+    command git "$@"
 }
 
 shipyard_record_lease "$window_id" "/tmp/test-worktree" "lease-123" "holder"

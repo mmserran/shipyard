@@ -78,6 +78,27 @@ shipyard_watcher_command() {
     printf '%s\n' "$command"
 }
 
+# Treehouse's pool worktrees are pre-warmed against the backing repo's
+# default branch as of whenever they were created or last returned, which
+# drifts from the remote's actual default branch over time. Resolve it from
+# the remote directly rather than trusting a local refs/remotes/origin/HEAD
+# symref, which is set once at clone time and otherwise never refreshed.
+shipyard_default_branch() {
+    local worktree="$1"
+
+    git -C "$worktree" ls-remote --symref origin HEAD 2>/dev/null \
+        | sed -n 's#^ref: refs/heads/\(.*\)\tHEAD$#\1#p'
+}
+
+shipyard_sync_worktree() {
+    local worktree="$1"
+    local base_branch="$2"
+
+    git -C "$worktree" fetch --quiet origin \
+        "$base_branch:refs/remotes/origin/$base_branch" 2>/dev/null || return 1
+    git -C "$worktree" checkout --quiet --detach "origin/$base_branch" 2>/dev/null || return 1
+}
+
 shipyard_new() {
     local intent="${*:-}"
     local project_root
@@ -90,6 +111,7 @@ shipyard_new() {
     local pending_window_id
     local watcher_command
     local base_head
+    local base_branch
 
     if [[ -z "$intent" ]]; then
         printf 'forge: usage: forge new <intent>\n' >&2
@@ -116,6 +138,16 @@ shipyard_new() {
         printf 'forge: Treehouse response did not include a worktree path\n' >&2
         return 1
     fi
+
+    if base_branch="$(shipyard_default_branch "$worktree")" && [[ -n "$base_branch" ]]; then
+        if ! shipyard_sync_worktree "$worktree" "$base_branch"; then
+            printf 'forge: warning: could not sync worktree to origin/%s; continuing with its current checkout\n' \
+                "$base_branch" >&2
+        fi
+    else
+        printf 'forge: warning: could not determine origin'"'"'s default branch; continuing with the worktree'"'"'s current checkout\n' >&2
+    fi
+
     lease_id="$(sed -n 's/.*"lease_id"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' <<<"$lease_json")"
     if [[ -z "$lease_id" ]]; then
         printf 'forge: Treehouse response did not include a lease id\n' >&2
