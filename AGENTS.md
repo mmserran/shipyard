@@ -26,11 +26,19 @@ this as building" — treat those as defaults, not requests.
 ```
 forge plan
 # Discuss and agree on an approach before writing code.
+# Stop here and wait. Do not create a branch or write any code until the
+# user explicitly says "Approved" — proposing a plan is not the same as
+# getting it approved, and silence or a related follow-up question is not
+# approval either.
 
+git switch development
+git pull
 git switch -c feat/new-feature
 forge build
-# Implement the change. forge build also runs `forge sync`,
-# so the window/pane immediately reflect the new branch.
+# Only after the user says "Approved": branch off `development` (never off
+# `main` or whatever branch happens to be checked out) and implement the
+# change. forge build also runs `forge sync`, so the window/pane immediately
+# reflect the new branch.
 
 forge review
 # Implementation looks complete.
@@ -45,10 +53,11 @@ no-mistakes axi run --yes --intent "..."
 
 forge check
 # Mark validating now that the run actually exists. This also opens a
-# `no-mistakes attach` pane so the run is visible live. Order matters
-# here: attach shows "no active run" and exits within a couple seconds
-# if nothing is running yet, so forge check must come after axi run
-# has started, never before.
+# `no-mistakes attach` pane so the run is visible live, split vertically
+# (side by side) so the agent pane and the TUI stay simultaneously
+# visible. Order matters here: attach shows "no active run" and exits
+# within a couple seconds if nothing is running yet, so forge check
+# must come after axi run has started, never before.
 
 forge done      # no-mistakes passed; the PR is up.
 forge alert     # no-mistakes failed.
@@ -82,7 +91,7 @@ looks stale (e.g. after a manual `git switch` outside of `forge build`).
 | When this happens                                                   | Call this      |
 | ---------------------------------------------------------------------- | --------------- |
 | You start discussing/designing an approach, before any code exists     | `forge plan`   |
-| You create the feature branch and start writing code                   | `forge build`  |
+| The user says "Approved" and you create the feature branch and start writing code | `forge build` |
 | Your implementation looks complete                                     | `forge review` |
 | Right after starting `no-mistakes axi run` in the background           | `forge check`  |
 | no-mistakes passes (pushed, PR open)                                   | `forge done`   |
@@ -100,6 +109,15 @@ pipeline, not something an agent needs to set.
 An agent must stop and wait for explicit user input at these points, even if
 `forge` state has been updated:
 
+- **Before any code is written.** After `forge plan`, wait for the user to
+  say the word "Approved" before creating a branch or calling `forge build`.
+  Do not infer approval from an enthusiastic reaction, a clarifying question,
+  or moving on to another topic — if the user hasn't said "Approved", treat
+  the plan as still open for discussion.
+- **Feature branches always branch off `development`.** Before `git switch
+  -c`, switch to `development` and pull latest, regardless of what branch is
+  currently checked out. Never branch off `main` or off another in-progress
+  feature branch.
 - **Running no-mistakes through to a passing push/PR is pre-authorized** by
   this workflow — that's the one exception to asking first. It does not
   extend to anything else: don't merge the PR, force-push, `git reset

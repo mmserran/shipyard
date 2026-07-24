@@ -22,7 +22,7 @@ context_open_no_mistakes_tui() {
     fi
 
     local pane_id
-    pane_id="$(tmux split-window -c "$PWD" -P -F '#{pane_id}' 'no-mistakes attach')" || return 0
+    pane_id="$(tmux split-window -h -c "$PWD" -P -F '#{pane_id}' 'no-mistakes attach')" || return 0
     tmux select-pane -t "$pane_id" -T 'no-mistakes' || true
 }
 
