@@ -26,11 +26,12 @@ screenshot_publish() {
             --prerelease
     fi
 
-    local branch stamp tmpdir
+    local branch stamp tmpdir repo
     branch="$(git rev-parse --abbrev-ref HEAD)"
     stamp="$(date +%Y%m%d-%H%M%S)"
     tmpdir="$(mktemp -d)"
     trap 'rm -rf "$tmpdir"' RETURN
+    repo="$(gh repo view --json nameWithOwner --jq '.nameWithOwner')"
 
     local index=0
     local file base asset_name url
@@ -44,8 +45,7 @@ screenshot_publish() {
         asset_name="${branch//\//-}-${stamp}-${index}-${base}"
         ln -s "$(realpath "$file")" "$tmpdir/$asset_name"
         gh release upload "$SCREENSHOT_RELEASE_TAG" "$tmpdir/$asset_name" >&2
-        url="$(gh release view "$SCREENSHOT_RELEASE_TAG" --json assets \
-            --jq ".assets[] | select(.name==\"$asset_name\") | .url")"
+        url="https://github.com/${repo}/releases/download/${SCREENSHOT_RELEASE_TAG}/${asset_name}"
         printf '![%s](%s)\n' "$base" "$url"
     done
 }
