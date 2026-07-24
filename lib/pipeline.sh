@@ -10,19 +10,11 @@ pipeline_require_tmux() {
 pipeline_badge_for() {
     case "$1" in
         planning)
-            printf ''
+            printf '💡'
             ;;
 
         building)
             printf '●'
-            ;;
-
-        waiting)
-            printf '⏸'
-            ;;
-
-        ready)
-            printf '✓'
             ;;
 
         validating)
@@ -33,7 +25,11 @@ pipeline_badge_for() {
             printf '#[fg=white,bg=red,bold] ⚠ #[default]'
             ;;
 
-        complete)
+        published)
+            printf '#[fg=black,bg=yellow,bold] ⚠ #[default]'
+            ;;
+
+        merged)
             printf '✓✓'
             ;;
 
@@ -54,21 +50,12 @@ pipeline_set() {
         return 2
     fi
 
+    tmux set-option -w @pipeline_manual_state "$state"
     tmux set-option -w @pipeline_state "$state"
     tmux set-option -w @pipeline_badge "$badge"
-    tmux refresh-client -S || true
+    tmux refresh-client -S 2>/dev/null || true
 
     printf 'Pipeline state: %s\n' "$state"
-}
-
-pipeline_clear() {
-    pipeline_require_tmux || return
-
-    tmux set-option -wu @pipeline_state 2>/dev/null || true
-    tmux set-option -wu @pipeline_badge 2>/dev/null || true
-    tmux refresh-client -S || true
-
-    printf 'Pipeline state cleared\n'
 }
 
 pipeline_status() {
@@ -84,4 +71,11 @@ pipeline_status() {
     fi
 
     printf 'Pipeline state: %s\n' "$state"
+
+    local intent
+    local pr
+    intent="$(tmux show-options -wqv @shipyard_intent)"
+    pr="$(tmux show-options -wqv @shipyard_pr)"
+    [[ -z "$intent" ]] || printf 'Intent: %s\n' "$intent"
+    [[ -z "$pr" ]] || printf 'PR: %s\n' "$pr"
 }
