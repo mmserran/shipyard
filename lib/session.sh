@@ -89,6 +89,7 @@ shipyard_new() {
     local window_id
     local pending_window_id
     local watcher_command
+    local base_head
 
     if [[ -z "$intent" ]]; then
         printf 'forge: usage: forge new <intent>\n' >&2
@@ -143,10 +144,13 @@ shipyard_new() {
         fi
     fi
 
+    base_head="$(git -C "$worktree" rev-parse HEAD 2>/dev/null || true)"
+
     shipyard_record_lease "$window_id" "$worktree" "$lease_id" "$lease_holder"
     tmux set-option -w -t "$window_id" @shipyard_intent "$intent"
     tmux set-option -w -t "$window_id" @shipyard_worktree "$worktree"
     tmux set-option -w -t "$window_id" @shipyard_lease_id "$lease_id"
+    tmux set-option -w -t "$window_id" @shipyard_base_head "$base_head"
     tmux set-option -w -t "$window_id" @pipeline_manual_state planning
     tmux set-option -w -t "$window_id" @pipeline_state planning
     tmux set-option -w -t "$window_id" @pipeline_badge "$(pipeline_badge_for planning)"
