@@ -67,6 +67,7 @@ pipeline_set building >/dev/null
 assert_equal "building" \
     "$(tmux show-options -wqv @pipeline_state)" \
     "forge build records building"
+watcher_apply_state "$window_id" planning
 
 scratch_repo="$test_tmp/scratch-repo"
 git init -q "$scratch_repo"
@@ -82,17 +83,26 @@ fi
 printf 'ok - clean worktree at base head is not building\n'
 
 : > "$scratch_repo/untracked.txt"
-if watcher_worktree_building "$window_id" "$scratch_repo"; then
+if watcher_should_build "$window_id" "$scratch_repo"; then
     printf 'ok - dirty worktree is building\n'
 else
     printf 'not ok - dirty worktree is building\n' >&2
     exit 1
 fi
+watcher_apply_state "$window_id" building
 rm -f "$scratch_repo/untracked.txt"
 
+if watcher_should_build "$window_id" "$scratch_repo"; then
+    printf 'ok - building remains sticky after worktree becomes clean\n'
+else
+    printf 'not ok - building remains sticky after worktree becomes clean\n' >&2
+    exit 1
+fi
+
+watcher_apply_state "$window_id" planning
 git -C "$scratch_repo" -c user.email=test@example.com -c user.name=test \
     commit -q --allow-empty -m second
-if watcher_worktree_building "$window_id" "$scratch_repo"; then
+if watcher_should_build "$window_id" "$scratch_repo"; then
     printf 'ok - HEAD past base head is building\n'
 else
     printf 'not ok - HEAD past base head is building\n' >&2

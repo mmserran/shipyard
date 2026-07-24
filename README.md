@@ -51,7 +51,7 @@ lease records on the next `forge new` after an abnormal tmux or machine exit.
 | Badge | State | Source |
 | --- | --- | --- |
 | `💡` | Planning; awaiting explicit approval | `forge new` |
-| `●` | Approved and building | `forge build` |
+| `●` | Building | Automatic |
 | `` | no-mistakes is running without a PR | Automatic |
 | yellow `⚠` | PR published | Automatic |
 | red `⚠` | Agent blocked or validation failed | `forge alert` or automatic |
@@ -61,16 +61,16 @@ PR publication replaces the validation badge; no spinner is shown. A later
 failure or an unmerged closed PR takes precedence over the yellow publication
 badge.
 
-Agents should call only:
+Agents can inspect or signal state with:
 
 ```bash
-forge build
 forge alert
 forge status
 ```
 
-Approval and blocking are semantic states, so they remain explicit. Validation,
-publication, failure, and merge are observed from no-mistakes and GitHub.
+Building is detected from changes in the leased worktree. Blocking remains
+explicit; validation, publication, failure, and merge are observed from
+no-mistakes and GitHub.
 
 ## Pane and status context
 
@@ -113,7 +113,7 @@ history.
 
 ```text
 forge new <intent>
-forge build
+forge build  # manually override the state to building
 forge alert
 forge status
 forge publish-screenshot <file> [<file> ...]

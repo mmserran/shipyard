@@ -47,6 +47,16 @@ watcher_worktree_building() {
     [[ -n "$current_head" && "$current_head" != "$base_head" ]]
 }
 
+watcher_should_build() {
+    local window_id="$1"
+    local worktree="$2"
+    local current_state
+
+    current_state="$(tmux show-options -wqv -t "$window_id" @pipeline_state 2>/dev/null)"
+    [[ "$current_state" == "building" ]] ||
+        watcher_worktree_building "$window_id" "$worktree"
+}
+
 watcher_run() {
     local window_id="${1:-}"
     local worktree="${2:-}"
@@ -102,7 +112,7 @@ watcher_run() {
             watcher_apply_state "$window_id" validating
         elif [[ "$manual_state" != "planning" && -n "$manual_state" ]]; then
             watcher_apply_state "$window_id" "$manual_state"
-        elif watcher_worktree_building "$window_id" "$worktree"; then
+        elif watcher_should_build "$window_id" "$worktree"; then
             watcher_apply_state "$window_id" building
         else
             watcher_apply_state "$window_id" planning
