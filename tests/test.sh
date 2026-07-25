@@ -297,6 +297,33 @@ case "$quoted_command" in
         ;;
 esac
 
+open_repo="$test_tmp/open-repo"
+git init -q "$open_repo"
+git -C "$open_repo" -c user.email=test@example.com -c user.name=test \
+    commit -q --allow-empty -m initial
+
+TMUX="test" shipyard_open "$open_repo"
+open_session="$(shipyard_session_name "$(shipyard_project_root "$open_repo")")"
+if ! tmux has-session -t "=$open_session" 2>/dev/null; then
+    printf 'not ok - forge open creates the project session\n' >&2
+    exit 1
+fi
+printf 'ok - forge open creates the project session\n'
+
+open_window="$(shipyard_command_window "$open_session")"
+assert_equal "command" \
+    "$(tmux display-message -p -t "$open_window" '#{window_name}')" \
+    "forge open names the window command"
+assert_equal "command" \
+    "$(tmux show-options -wqv -t "$open_window" @shipyard_role)" \
+    "forge open tags the window with the command role"
+
+TMUX="test" shipyard_open "$open_repo"
+command_window_count="$(tmux list-windows -t "=$open_session" \
+    -F '#{@shipyard_role}' | grep -Fxc 'command' || true)"
+assert_equal "1" "$command_window_count" \
+    "repeated forge open reuses the same command window"
+
 TMUX="test" shipyard_new "intent workflow"
 intent_window="$(tmux list-windows -a -F '#{window_name} #{window_id}' |
     sed -n 's/^intent workflow //p')"

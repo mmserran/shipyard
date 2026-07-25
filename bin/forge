@@ -26,6 +26,8 @@ forge_usage() {
 Shipyard coordinates AI-powered software development workflows.
 
 Usage:
+  forge open [path]   Open (or create) a project's tmux session and its
+                       command window; defaults to the current directory
   forge new <intent>  Create an intent window in a leased Treehouse worktree
 
   forge publish-screenshot <file> [<file> ...]
@@ -44,6 +46,11 @@ main() {
     local command="${1:-help}"
 
     case "$command" in
+        open)
+            shift
+            shipyard_open "${1:-.}"
+            ;;
+
         new)
             shift
             shipyard_new "$@"

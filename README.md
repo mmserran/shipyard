@@ -1,8 +1,8 @@
 # Shipyard
 
 Shipyard presents intent-oriented development workflows in tmux. Each tmux
-session owns one repository, and each window is a unit of work backed by a
-leased Treehouse worktree.
+session owns one repository, with intent windows backed by leased Treehouse
+worktrees and an optional command window rooted in the repository itself.
 
 ## Setup
 
@@ -45,12 +45,33 @@ Shipyard:
 If the remote's default branch cannot be resolved or fetched, `forge new`
 warns and continues from the worktree's existing checkout.
 
-The first unit creates the project session directly. There is no permanent
-command window. Run the agent or development command of your choice from the
-new shell.
+The first unit creates the project session directly. Run the agent or
+development command of your choice from the new shell.
 
 Closing the window returns its Treehouse lease. Shipyard also reconciles stale
 lease records on the next `forge new` after an abnormal tmux or machine exit.
+
+## Open a project's command window
+
+```bash
+forge open
+forge open ~/projects/my-app
+```
+
+Opens (creating if needed) the project's tmux session and switches to its
+`command` window: a plain shell rooted in the project itself, not leased from
+Treehouse and not tied to any unit of work. Use it for commands that operate
+on the repository as a whole rather than on a specific intent. Repeated calls
+reuse the same command window instead of creating another one.
+
+If the session doesn't exist yet, `forge open` creates it, so it also works
+as a way to open a new tmux session for a repository you haven't started
+working in yet:
+
+```bash
+forge open ~/.config/shipyard
+forge open portfolio/mserrano.net-web-services
+```
 
 ## Workflow states
 
@@ -123,6 +144,7 @@ history.
 ## Commands
 
 ```text
+forge open [path]
 forge new <intent>
 forge build  # manually override the state to building
 forge alert
