@@ -67,6 +67,56 @@ shipyard_session_for_project() {
     printf '%s-%s\n' "$session_name" "$digest"
 }
 
+shipyard_command_window() {
+    local session_name="$1"
+
+    tmux list-windows -t "=$session_name" -F '#{window_id} #{@shipyard_role}' 2>/dev/null |
+        awk '$2 == "command" {print $1; exit}'
+}
+
+# Unlike `forge new`, this window is not leased from Treehouse and carries no
+# intent metadata or watcher: it's a plain shell rooted in the project itself,
+# for commands that operate on the repository rather than a unit of work.
+shipyard_open() {
+    local requested_path="${1:-.}"
+    local project_root
+    local session_name
+    local window_id
+
+    project_root="$(shipyard_project_root "$requested_path")" || return
+    if ! command -v tmux >/dev/null 2>&1; then
+        printf 'forge: tmux is not installed\n' >&2
+        return 1
+    fi
+
+    session_name="$(shipyard_session_for_project "$project_root")"
+
+    if ! tmux has-session -t "=$session_name" 2>/dev/null; then
+        if ! window_id="$(tmux new-session -d -P -F '#{window_id}' \
+            -s "$session_name" -n command -c "$project_root")"; then
+            return 1
+        fi
+        tmux set-option -t "$session_name" @shipyard_project_root "$project_root"
+        tmux set-option -w -t "$window_id" @shipyard_role command
+    else
+        window_id="$(shipyard_command_window "$session_name")"
+        if [[ -z "$window_id" ]]; then
+            if ! window_id="$(tmux new-window -d -P -F '#{window_id}' \
+                -t "=$session_name:" -n command -c "$project_root")"; then
+                return 1
+            fi
+            tmux set-option -w -t "$window_id" @shipyard_role command
+        fi
+    fi
+
+    if [[ -n "${TMUX:-}" ]]; then
+        tmux switch-client -t "$window_id"
+    else
+        tmux select-window -t "$window_id"
+        tmux attach-session -t "=$session_name"
+    fi
+}
+
 shipyard_state_home() {
     printf '%s/shipyard' "${XDG_STATE_HOME:-$HOME/.local/state}"
 }
