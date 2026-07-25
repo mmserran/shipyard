@@ -1,8 +1,8 @@
 # Shipyard
 
 Shipyard presents intent-oriented development workflows in tmux. Each tmux
-session owns one repository, and each window is a unit of work backed by a
-leased Treehouse worktree.
+session owns one repository, with intent windows backed by leased Treehouse
+worktrees and an optional command window rooted in the repository itself.
 
 ## Setup
 
