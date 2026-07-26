@@ -73,8 +73,9 @@ window_id="$(tmux display-message -p '#{window_id}')"
 pane_id="$(tmux display-message -p '#{pane_id}')"
 
 assert_equal "💡" "$(pipeline_badge_for planning)" "planning uses lightbulb"
-assert_equal "●" "$(pipeline_badge_for building)" "building uses dot"
-assert_equal "✓✓" "$(pipeline_badge_for merged)" "merged uses two checks"
+assert_equal "🔨" "$(pipeline_badge_for building)" "building uses hammer"
+assert_equal "🔍" "$(pipeline_badge_for validating)" "validating uses magnifying glass"
+assert_equal "🚀" "$(pipeline_badge_for merged)" "merged uses rocket"
 
 pipeline_set building >/dev/null
 assert_equal "building" \
