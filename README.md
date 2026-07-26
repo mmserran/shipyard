@@ -95,9 +95,11 @@ forge alert
 forge status
 ```
 
-Building is detected from changes in the leased worktree. Blocking remains
-explicit; validation, publication, failure, and merge are observed from
-no-mistakes and GitHub.
+Building is detected from changes in the leased worktree once the agent has
+checked out a named feature branch; edits made directly on the base branch,
+or a worktree still detached at its leased commit, don't trigger it. Blocking
+remains explicit; validation, publication, failure, and merge are observed
+from no-mistakes and GitHub.
 
 While a run is active, the window watcher also opens a side-by-side pane
 running `no-mistakes attach`, so a human can watch the TUI without leaving the
