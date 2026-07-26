@@ -10,27 +10,27 @@ pipeline_require_tmux() {
 pipeline_badge_for() {
     case "$1" in
         planning)
-            printf '💡'
+            printf ' 💡 '
             ;;
 
         building)
-            printf '●'
+            printf ' ● '
             ;;
 
         validating)
-            printf ''
+            printf ' 🔍 '
             ;;
 
         attention)
-            printf '#[fg=white,bg=red,bold] ⚠ #[default]'
+            printf '#[fg=white,bg=red,bold] 🔔 #[default]'
             ;;
 
         published)
-            printf '#[fg=black,bg=yellow,bold] ⚠ #[default]'
+            printf '#[fg=black,bg=yellow,bold] 📬 #[default]'
             ;;
 
         merged)
-            printf '✓✓'
+            printf ' 🚢 '
             ;;
 
         *)
