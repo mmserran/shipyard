@@ -178,6 +178,7 @@ shipyard_new() {
     local watcher_command
     local base_head
     local base_branch
+    local top_pane_id
 
     if [[ -z "$intent" ]]; then
         printf 'forge: usage: forge new <intent>\n' >&2
@@ -241,6 +242,10 @@ shipyard_new() {
             return 1
         fi
     fi
+
+    top_pane_id="$(tmux display-message -p -t "$window_id" '#{pane_id}')"
+    tmux split-window -v -p 25 -t "$window_id" -c "$worktree"
+    tmux select-pane -t "$top_pane_id"
 
     base_head="$(git -C "$worktree" rev-parse HEAD 2>/dev/null || true)"
 
