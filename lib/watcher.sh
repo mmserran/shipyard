@@ -29,15 +29,25 @@ watcher_no_mistakes_status() {
     (cd "$worktree" && no-mistakes axi status 2>/dev/null) || true
 }
 
-# True once the agent has started working: the worktree has uncommitted
-# changes, or HEAD has moved past the commit it was leased at. Lets Shipyard
-# detect the planning -> building transition without the agent having to
-# call `forge build` itself.
+# True once the agent has started working on a feature branch: HEAD is on a
+# named branch other than the one the worktree was leased against, and the
+# worktree has uncommitted changes or HEAD has moved past the commit it was
+# leased at. Lets Shipyard detect the planning -> building transition without
+# the agent having to call `forge build` itself. Still-detached worktrees and
+# edits made directly on the base branch don't count as building.
 watcher_worktree_building() {
     local window_id="$1"
     local worktree="$2"
+    local base_branch
     local base_head
+    local current_branch
     local current_head
+
+    current_branch="$(git -C "$worktree" branch --show-current 2>/dev/null || true)"
+    [[ -n "$current_branch" ]] || return 1
+
+    base_branch="$(tmux show-options -wqv -t "$window_id" @shipyard_base_branch 2>/dev/null)"
+    [[ -z "$base_branch" || "$current_branch" != "$base_branch" ]] || return 1
 
     [[ -n "$(git -C "$worktree" status --porcelain 2>/dev/null)" ]] && return 0
 

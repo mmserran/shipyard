@@ -249,6 +249,7 @@ shipyard_new() {
     tmux set-option -w -t "$window_id" @shipyard_worktree "$worktree"
     tmux set-option -w -t "$window_id" @shipyard_lease_id "$lease_id"
     tmux set-option -w -t "$window_id" @shipyard_base_head "$base_head"
+    tmux set-option -w -t "$window_id" @shipyard_base_branch "$base_branch"
     tmux set-option -w -t "$window_id" @pipeline_manual_state planning
     tmux set-option -w -t "$window_id" @pipeline_state planning
     tmux set-option -w -t "$window_id" @pipeline_badge "$(pipeline_badge_for planning)"
