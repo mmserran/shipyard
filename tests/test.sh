@@ -87,6 +87,7 @@ git init -q "$scratch_repo"
 git -C "$scratch_repo" -c user.email=test@example.com -c user.name=test \
     commit -q --allow-empty -m initial
 scratch_head="$(git -C "$scratch_repo" rev-parse HEAD)"
+scratch_branch="$(git -C "$scratch_repo" branch --show-current)"
 tmux set-option -w -t "$window_id" @shipyard_base_head "$scratch_head"
 
 if watcher_worktree_building "$window_id" "$scratch_repo"; then
@@ -121,6 +122,35 @@ else
     printf 'not ok - HEAD past base head is building\n' >&2
     exit 1
 fi
+
+watcher_apply_state "$window_id" planning
+tmux set-option -w -t "$window_id" @shipyard_base_branch "$scratch_branch"
+
+: > "$scratch_repo/on-base-branch.txt"
+if watcher_worktree_building "$window_id" "$scratch_repo"; then
+    printf 'not ok - dirty tree on the base branch is not building\n' >&2
+    exit 1
+fi
+printf 'ok - dirty tree on the base branch is not building\n'
+
+git -C "$scratch_repo" checkout -q -b feature/test
+if watcher_worktree_building "$window_id" "$scratch_repo"; then
+    printf 'ok - dirty tree on a feature branch is building\n'
+else
+    printf 'not ok - dirty tree on a feature branch is building\n' >&2
+    exit 1
+fi
+rm -f "$scratch_repo/on-base-branch.txt"
+
+git -C "$scratch_repo" checkout -q --detach HEAD
+: > "$scratch_repo/detached.txt"
+if watcher_worktree_building "$window_id" "$scratch_repo"; then
+    printf 'not ok - detached HEAD with dirty tree is not building\n' >&2
+    exit 1
+fi
+printf 'ok - detached HEAD with dirty tree is not building\n'
+rm -f "$scratch_repo/detached.txt"
+tmux set-option -wu -t "$window_id" @shipyard_base_branch
 
 watcher_apply_state "$window_id" published "https://example.test/pull/1"
 assert_equal "published" \
