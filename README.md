@@ -80,11 +80,11 @@ forge open portfolio/mserrano.net-web-services
 | Badge | State | Source |
 | --- | --- | --- |
 | `💡` | Planning; awaiting explicit approval | `forge new` |
-| `🔨` | Building | Automatic |
+| `●` | Building | Automatic |
 | `🔍` | no-mistakes is running without a PR | Automatic |
 | yellow `📬` | PR published | Automatic |
-| red `🚨` | Agent blocked or validation failed | `forge alert` or automatic |
-| `🚀` | PR merged | Automatic |
+| red `🔔` | Agent blocked or validation failed | `forge alert` or automatic |
+| `🚢` | PR merged | Automatic |
 
 PR publication replaces the validation badge. A later failure or an
 unmerged closed PR takes precedence over the yellow publication badge.
@@ -112,7 +112,7 @@ isn't already running (closed by hand, or its process exited).
 The status bar contains:
 
 ```text
-project   💡 intent-a   🔨 intent-b   🚨 intent-c       2026-10-22 00:53
+project   💡 intent-a   ● intent-b   🔔 intent-c       2026-10-22 00:53
 ```
 
 - Left: the stable repository session name

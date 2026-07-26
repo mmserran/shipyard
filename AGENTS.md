@@ -21,7 +21,7 @@ Always branch from latest `origin/development` (never `main`, detached HEAD, or 
 ```bash
 no-mistakes axi run --yes --intent "<user's complete objective and decisions>"
 ```
-Run in background if needed. Shipyard auto-tracks state (🔍 validating → yellow 📬 published → red 🚨 failed/blocked → 🚀 merged) — don't narrate this manually. Never merge, close, or force-push the PR unless explicitly asked.
+Run in background if needed. Shipyard auto-tracks state (🔍 validating → yellow 📬 published → red 🔔 failed/blocked → 🚢 merged) — don't narrate this manually. Never merge, close, or force-push the PR unless explicitly asked.
 
 ## Forge commands
 
