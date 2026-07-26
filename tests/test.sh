@@ -38,7 +38,7 @@ tmux() {
     if [[ "${fail_new_window:-0}" -eq 1 && "$1" == "new-window" ]]; then
         return 1
     fi
-    if [[ "$1" == "split-window" ]]; then
+    if [[ "$1" == "split-window" && "$*" == *" -h "* ]]; then
         printf '%s\n' "$*" > "$test_tmp/split-window"
         printf '%%attach-test\n'
         return 0
@@ -366,6 +366,20 @@ assert_equal "💡" \
 assert_equal "bash" \
     "$(tmux display-message -p -t "$intent_window" '#{pane_current_command}')" \
     "forge new starts a shell rather than an agent"
+assert_equal "2" \
+    "$(tmux list-panes -t "$intent_window" | wc -l | tr -d ' ')" \
+    "forge new opens a two-pane layout"
+intent_pane_heights="$(tmux list-panes -t "$intent_window" -F '#{pane_top} #{pane_height}' | sort -n)"
+intent_top_height="$(awk 'NR==1{print $2}' <<<"$intent_pane_heights")"
+intent_bottom_height="$(awk 'NR==2{print $2}' <<<"$intent_pane_heights")"
+intent_bottom_pct=$(( intent_bottom_height * 100 / (intent_top_height + intent_bottom_height + 1) ))
+if (( intent_bottom_pct >= 20 && intent_bottom_pct <= 30 )); then
+    printf 'ok - bottom pane is about 25%% of the window height\n'
+else
+    printf 'not ok - bottom pane is about 25%% of the window height (got %s%%)\n' \
+        "$intent_bottom_pct" >&2
+    exit 1
+fi
 intent_session="$(tmux display-message -p -t "$intent_window" '#{session_name}')"
 assert_equal "$(shipyard_project_root "$repo_root")" \
     "$(tmux show-options -qv -t "$intent_session" @shipyard_project_root)" \

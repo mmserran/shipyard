@@ -37,7 +37,9 @@ Shipyard:
 2. leases a pre-warmed Treehouse worktree;
 3. refreshes that worktree to a detached checkout of the remote's current
    default-branch tip when the remote is available;
-4. creates an intent window rooted in that worktree;
+4. creates an intent window rooted in that worktree, split into a top pane
+   (75% of the height) for the main work and a bottom pane (25%) for a
+   secondary tool, with focus on the top pane;
 5. records enough lease identity for safe automatic cleanup;
 6. starts a state watcher; and
 7. opens an ordinary shell without starting an agent.
