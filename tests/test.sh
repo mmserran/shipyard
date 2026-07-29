@@ -639,6 +639,26 @@ for npm_guard_args in "--silent install" "--prefix . install" "-C . ci"; do
 done
 printf 'ok - npm shim finds mutating commands after global options\n'
 
+for npm_prefix_args in \
+    "--prefix $npm_scenario_dir install" \
+    "--prefix=$npm_scenario_dir install" \
+    "-C $npm_scenario_dir install"; do
+    read -r -a npm_prefix_argv <<<"$npm_prefix_args"
+    if npm_err="$(cd "$test_tmp" && PATH="$npm_path" "$repo_root/bin/npm" "${npm_prefix_argv[@]}" 2>&1 1>/dev/null)"; then
+        printf 'not ok - npm shim honors the target directory from %s\n' "$npm_prefix_args" >&2
+        exit 1
+    fi
+    case "$npm_err" in
+        *"npm install is disabled in this worktree"*) ;;
+        *)
+            printf 'not ok - npm shim honors the target directory from %s\n%s\n' \
+                "$npm_prefix_args" "$npm_err" >&2
+            exit 1
+            ;;
+    esac
+done
+printf 'ok - npm shim guards directory-changing options\n'
+
 npm_out2="$(cd "$npm_scenario_dir" && PATH="$npm_path" "$repo_root/bin/npm" run build)"
 assert_equal "real-npm-called run build" "$npm_out2" \
     "npm shim passes non-mutating subcommands through even when node_modules is symlinked"

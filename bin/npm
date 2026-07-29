@@ -11,10 +11,12 @@ SHIPYARD_HOME="${SHIPYARD_HOME:-$HOME/.config/shipyard}"
 # absent node_modules means there's nothing shared to protect, so this is a
 # no-op everywhere else, including non-Node repositories.
 npm_guard_nearest_node_modules() {
-    local dir="$PWD"
+    local dir="${1:-$PWD}"
+
+    [[ "$dir" == /* ]] || dir="$PWD/$dir"
 
     while :; do
-        if [[ -e "$dir/node_modules" ]]; then
+        if [[ -e "$dir/node_modules" || -L "$dir/node_modules" ]]; then
             printf '%s\n' "$dir/node_modules"
             return 0
         fi
@@ -70,8 +72,37 @@ npm_guard_command() {
     return 1
 }
 
+npm_guard_working_dir() {
+    local arg
+    local dir="$PWD"
+    local expect_dir=0
+
+    for arg in "$@"; do
+        if [[ "$expect_dir" -eq 1 ]]; then
+            dir="$arg"
+            expect_dir=0
+            continue
+        fi
+
+        case "$arg" in
+            --)
+                break
+                ;;
+            --prefix|-C)
+                expect_dir=1
+                ;;
+            --prefix=*)
+                dir="${arg#--prefix=}"
+                ;;
+        esac
+    done
+
+    printf '%s\n' "$dir"
+}
+
 main() {
     local command
+    local guard_dir
     local real_npm
     local node_modules
 
@@ -81,7 +112,8 @@ main() {
     fi
 
     command="$(npm_guard_command "$@" || true)"
-    if node_modules="$(npm_guard_nearest_node_modules)" && [[ -L "$node_modules" ]]; then
+    guard_dir="$(npm_guard_working_dir "$@")"
+    if node_modules="$(npm_guard_nearest_node_modules "$guard_dir")" && [[ -L "$node_modules" ]]; then
         case "$command" in
             install|i|ci|add|update|up|remove|rm|uninstall|un|dedupe|prune)
                 printf 'npm %s is disabled in this worktree: node_modules is symlinked to the root checkout.\n' \
