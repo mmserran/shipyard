@@ -97,6 +97,18 @@ exit() {
     local worktree
     local lease_id
 
+    # A function, unlike the builtin, also runs inside subshells and command
+    # substitutions ($(exit), a background job, ...). There, returning and
+    # forgetting the lease would be real -- treehouse return and rm aren't
+    # subshell-scoped -- while `builtin exit` only ends that child process,
+    # leaving the top-level shell (and the window) still attached to a
+    # worktree Treehouse may already have reset or handed to other work.
+    # Only guard the actual top-level shell; anything else exits plainly.
+    if [[ "${BASHPID:-$$}" != "$$" ]]; then
+        builtin exit "$@"
+        return
+    fi
+
     info="$(shipyard_exit_worktree_info 2>/dev/null)"
     if [[ -z "$info" ]]; then
         builtin exit "$@"

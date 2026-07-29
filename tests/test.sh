@@ -468,6 +468,23 @@ if [[ -e "$(shipyard_state_home)/windows/lease-exit-guard.lease" ]]; then
 fi
 printf 'ok - exit guard forgets the lease after a dirty return succeeds\n'
 
+# exit() is a function, so it also runs inside subshells/command
+# substitutions -- $(exit) only ends the subshell, but treehouse return and
+# rm aren't subshell-scoped, so without the BASHPID guard this would really
+# return and forget the lease while the top-level shell (and window) is
+# still attached to that worktree.
+shipyard_record_lease "$exit_window" "$exit_worktree" "lease-exit-guard" "holder"
+source "$repo_root/shell/bash.sh"
+(TMUX_PANE="$exit_pane" exit 0) 2>/dev/null || true
+unset -f exit
+if [[ -e "$(shipyard_state_home)/windows/lease-exit-guard.lease" ]]; then
+    printf 'ok - exit guard does not act from inside a subshell\n'
+else
+    printf 'not ok - exit guard does not act from inside a subshell\n' >&2
+    exit 1
+fi
+rm -f "$(shipyard_state_home)/windows/lease-exit-guard.lease"
+
 # kill-window on a session's last window already tears down the session.
 tmux kill-window -t "$exit_window" 2>/dev/null || true
 
