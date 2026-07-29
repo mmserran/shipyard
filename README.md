@@ -73,6 +73,11 @@ a linked worktree. The `bin/npm` shim on `PATH` detects a symlinked
 agent, tool, or human is driving the worktree's shell, since it isn't tied to
 any one agent's permission config.
 
+npm has far more global options than the shim can enumerate, so it fails
+closed: a recognized option (`--prefix`, `--tag`, `--force`, ...) is parsed
+correctly, but an unrecognized one makes the shim unable to confirm the
+invocation is safe, and it blocks rather than guess.
+
 ```bash
 forge new --new-deps nav-header   # skip linking; this worktree gets its own
                                    # independent, writable node_modules

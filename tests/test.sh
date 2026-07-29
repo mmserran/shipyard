@@ -680,6 +680,36 @@ for npm_blocked_cmd in ci add update rm dedupe; do
 done
 printf 'ok - npm shim blocks all configured mutating subcommands\n'
 
+if npm_err="$(cd "$npm_scenario_dir" && PATH="$npm_path" "$repo_root/bin/npm" --tag next install 2>&1 1>/dev/null)"; then
+    printf 'not ok - npm shim blocks a mutating command hidden behind a recognized value-taking flag\n' >&2
+    exit 1
+fi
+case "$npm_err" in
+    *"disabled in this worktree"*)
+        printf 'ok - npm shim blocks a mutating command hidden behind a recognized value-taking flag\n'
+        ;;
+    *)
+        printf 'not ok - npm shim blocks a mutating command hidden behind a recognized value-taking flag\n%s\n' \
+            "$npm_err" >&2
+        exit 1
+        ;;
+esac
+
+if npm_err="$(cd "$npm_scenario_dir" && PATH="$npm_path" "$repo_root/bin/npm" --some-unrecognized-flag run build 2>&1 1>/dev/null)"; then
+    printf 'not ok - npm shim fails closed on an unrecognized option\n' >&2
+    exit 1
+fi
+case "$npm_err" in
+    *"could not confirm this is safe"*)
+        printf 'ok - npm shim fails closed on an unrecognized option\n'
+        ;;
+    *)
+        printf 'not ok - npm shim fails closed on an unrecognized option\n%s\n' \
+            "$npm_err" >&2
+        exit 1
+        ;;
+esac
+
 npm_none_dir="$test_tmp/npm-scenario-none"
 mkdir -p "$npm_none_dir"
 npm_out3="$(cd "$npm_none_dir" && PATH="$npm_path" "$repo_root/bin/npm" install)"
