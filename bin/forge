@@ -29,6 +29,9 @@ Usage:
   forge open [path]   Open (or create) a project's tmux session and its
                        command window; defaults to the current directory
   forge new <intent>  Create an intent window in a leased Treehouse worktree
+  forge close         Force-close this window: abort any active no-mistakes
+                       run for it, discard uncommitted changes, and return
+                       the Treehouse lease
 
   forge publish-screenshot <file> [<file> ...]
                        Upload screenshot(s) to a rolling GitHub Release and
@@ -54,6 +57,10 @@ main() {
         new)
             shift
             shipyard_new "$@"
+            ;;
+
+        close)
+            shipyard_close
             ;;
 
         publish-screenshot)

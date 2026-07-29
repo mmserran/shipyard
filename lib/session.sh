@@ -134,6 +134,23 @@ shipyard_record_lease() {
         > "$state_home/windows/${lease_id}.lease"
 }
 
+# Removes a window's own lease-tracking record, without touching Treehouse.
+# For callers that already returned the lease themselves (the exit() guard,
+# forge close) so the window-unlinked hook's later shipyard_reap finds
+# nothing left to reap for this window and cleanly no-ops, rather than
+# attempting a second `treehouse return` on an already-released lease.
+shipyard_forget_lease() {
+    local window_id="$1"
+    local lease_file
+    local recorded_window_id
+
+    for lease_file in "$(shipyard_state_home)/windows"/*.lease; do
+        [[ -e "$lease_file" ]] || continue
+        IFS=$'\t' read -r recorded_window_id _ < "$lease_file"
+        [[ "$recorded_window_id" == "$window_id" ]] && rm -f "$lease_file"
+    done
+}
+
 shipyard_watcher_command() {
     local window_id="$1"
     local worktree="$2"
@@ -218,7 +235,9 @@ shipyard_new() {
     lease_id="$(sed -n 's/.*"lease_id"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' <<<"$lease_json")"
     if [[ -z "$lease_id" ]]; then
         printf 'forge: Treehouse response did not include a lease id\n' >&2
-        treehouse return "$worktree" --if-lease-holder "$lease_holder" || true
+        # --force is safe here: this worktree was only just synced, before
+        # any window or work existed, so there is nothing local to lose.
+        treehouse return "$worktree" --if-lease-holder "$lease_holder" --force || true
         return 1
     fi
 
@@ -269,6 +288,58 @@ shipyard_new() {
     fi
 }
 
+# Force-closes the current window. Running this command at all is the
+# explicit "I want to close" signal (unlike exit(), which protects against
+# losing work by accident), so uncommitted changes are discarded rather than
+# prompted for -- but reported, not silent. Aborts an active no-mistakes run
+# for this branch first, so its daemon isn't left tracking a worktree
+# Treehouse is about to reset and potentially hand to a different unit of
+# work out from under it.
+shipyard_close() {
+    local window_id
+    local worktree
+    local lease_id
+    local status_output
+    local run_output
+
+    window_id="$(tmux display-message -p -t "${TMUX_PANE:-}" '#{window_id}' 2>/dev/null)"
+    if [[ -z "$window_id" ]]; then
+        printf 'forge: not inside a tmux window\n' >&2
+        return 1
+    fi
+
+    worktree="$(tmux show-options -wqv -t "$window_id" @shipyard_worktree 2>/dev/null)"
+    lease_id="$(tmux show-options -wqv -t "$window_id" @shipyard_lease_id 2>/dev/null)"
+    if [[ -z "$worktree" || -z "$lease_id" ]]; then
+        printf 'forge: not a leased intent window\n' >&2
+        return 1
+    fi
+
+    if command -v no-mistakes >/dev/null 2>&1; then
+        run_output="$(cd "$worktree" && no-mistakes axi status 2>/dev/null)" || run_output=""
+        # No outcome: line means the run hasn't reached a terminal state
+        # (checks-passed/passed/failed/cancelled) -- it's still active.
+        if [[ -n "$run_output" ]] && ! grep -q '^outcome:' <<<"$run_output"; then
+            printf 'forge: aborting the active no-mistakes run for this branch\n' >&2
+            (cd "$worktree" && no-mistakes axi abort) 2>&1 | sed 's/^/forge: /' >&2
+        fi
+    fi
+
+    status_output="$(git -C "$worktree" status --short 2>/dev/null)"
+    if [[ -n "$status_output" ]]; then
+        printf 'forge: closing %s and discarding uncommitted changes:\n%s\n' \
+            "$worktree" "$status_output" >&2
+    fi
+
+    if ! treehouse return "$worktree" --if-lease-id "$lease_id" --force; then
+        printf 'forge: failed to return the Treehouse lease; not closing the window\n' >&2
+        return 1
+    fi
+
+    shipyard_forget_lease "$window_id"
+    tmux kill-window -t "$window_id"
+}
+
 shipyard_reap() {
     local window_id="${1:-}"
     local lease_file
@@ -277,6 +348,8 @@ shipyard_reap() {
     local lease_id
     local lease_holder
     local result=0
+    local return_output
+    local return_status
 
     [[ -n "$window_id" ]] || return 2
     if tmux list-windows -a -F '#{window_id}' 2>/dev/null | grep -Fxq "$window_id"; then
@@ -287,7 +360,15 @@ shipyard_reap() {
         [[ -e "$lease_file" ]] || continue
         IFS=$'\t' read -r recorded_window_id path lease_id lease_holder < "$lease_file"
         [[ "$recorded_window_id" == "$window_id" ]] || continue
-        if treehouse return "$path" --if-lease-id "$lease_id"; then
+        # Without --force, `treehouse return` exits 0 even when it declines
+        # (uncommitted changes, no TTY to answer "Clean and return?") --
+        # trusting the exit code alone would delete this lease's only
+        # record while Treehouse still holds it, orphaning the slot beyond
+        # anything shipyard_reconcile can ever retry. Check the output too.
+        return_output="$(treehouse return "$path" --if-lease-id "$lease_id" < /dev/null 2>&1)"
+        return_status=$?
+        printf '%s\n' "$return_output" >&2
+        if [[ "$return_status" -eq 0 && "$return_output" != *Aborted* ]]; then
             rm -f "$lease_file"
         else
             result=1
