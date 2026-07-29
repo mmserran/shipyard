@@ -50,8 +50,30 @@ warns and continues from the worktree's existing checkout.
 The first unit creates the project session directly. Run the agent or
 development command of your choice from the new shell.
 
-Closing the window returns its Treehouse lease. Shipyard also reconciles stale
-lease records on the next `forge new` after an abnormal tmux or machine exit.
+Closing a clean window returns its Treehouse lease. If automatic cleanup
+cannot return a lease, Shipyard keeps the cleanup record and retries during
+the next `forge new`.
+
+## Closing a unit of work
+
+Typing `exit` in a leased window's last pane checks the worktree first: clean,
+and it returns the lease and exits immediately; uncommitted changes, and it
+runs Treehouse's own `Clean and return? [Y/n]` prompt with a real terminal
+attached, so an actual person answers it instead of it silently declining in
+the background. Answering no cancels the exit and drops you back in the shell
+rather than losing the session.
+
+```bash
+forge close
+```
+
+Force-closes the current window instead: aborts any active no-mistakes run
+for it first (so its daemon isn't left tracking a worktree Treehouse is about
+to reset and hand to a different unit of work), discards uncommitted changes,
+and returns the lease. Running the command at all is the explicit signal to
+discard, so it doesn't prompt — but it does report what it's discarding.
+If returning the lease fails, the window stays open and its cleanup record is
+preserved.
 
 ## Open a project's command window
 
@@ -123,6 +145,11 @@ Every pane border independently shows its current `repository  branch`. Promp
 hooks and the window watcher refresh this context, so a pane that enters another
 repository remains accurately labeled without changing the session identity.
 
+A ✏️ next to a window's title means its worktree currently has uncommitted
+changes. It's orthogonal to the pipeline badge — a window can be `building`
+and dirty at once, that's normal — and purely informational: closing that
+window right now would need a decision, one way or another.
+
 ## Navigation
 
 | Shortcut | Action |
@@ -149,6 +176,7 @@ history.
 ```text
 forge open [path]
 forge new <intent>
+forge close  # force-close the current window, discarding uncommitted changes
 forge build  # manually override the state to building
 forge alert
 forge status
@@ -161,11 +189,14 @@ automatic state management.
 ## Architecture
 
 - `bin/forge` routes the CLI.
-- `lib/session.sh` creates project sessions, leases worktrees, and records
-  cleanup metadata.
+- `shell/bash.sh` sets up a Shipyard shell, including the exit() guard that
+  protects an intent window's lease from an accidental close.
+- `lib/session.sh` creates project sessions, leases worktrees, force-closes
+  windows (`forge close`), and records cleanup metadata.
 - `lib/context.sh` maintains pane repository and branch context.
 - `lib/pipeline.sh` maps effective states to tmux badges.
-- `lib/watcher.sh` derives validation and PR states.
+- `lib/watcher.sh` derives validation and PR states, and flags a worktree's
+  uncommitted-changes status for the status bar.
 - `lib/screenshot.sh` publishes PR-safe visual evidence.
 - `skills/publish-screenshots/SKILL.md` teaches agents when local visual
   evidence must be published.

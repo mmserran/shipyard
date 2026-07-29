@@ -24,6 +24,23 @@ watcher_apply_state() {
     fi
 }
 
+# Ambient, orthogonal to @pipeline_badge: a window can be building and dirty
+# at once, that's normal. Purely informational -- surfaces that closing this
+# window right now would need a decision, without judging the pipeline state.
+watcher_apply_dirty() {
+    local window_id="$1"
+    local worktree="$2"
+    local dirty=""
+    local current
+
+    [[ -n "$(git -C "$worktree" status --porcelain 2>/dev/null)" ]] && dirty=1
+    current="$(tmux show-options -wqv -t "$window_id" @shipyard_dirty 2>/dev/null)"
+    if [[ "$dirty" != "$current" ]]; then
+        tmux set-option -w -t "$window_id" @shipyard_dirty "$dirty"
+        tmux refresh-client -S 2>/dev/null || true
+    fi
+}
+
 watcher_no_mistakes_status() {
     local worktree="$1"
     (cd "$worktree" && no-mistakes axi status 2>/dev/null) || true
@@ -108,6 +125,7 @@ watcher_run() {
 
     while watcher_window_exists "$window_id"; do
         shipyard_refresh_window_context "$window_id"
+        watcher_apply_dirty "$window_id" "$worktree"
         manual_state="$(tmux show-options -wqv -t "$window_id" @pipeline_manual_state)"
         output=""
         if command -v no-mistakes >/dev/null 2>&1; then

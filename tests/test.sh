@@ -26,6 +26,13 @@ source "$repo_root/lib/pipeline.sh"
 source "$repo_root/lib/session.sh"
 # shellcheck source=../lib/watcher.sh
 source "$repo_root/lib/watcher.sh"
+# shellcheck source=../shell/bash.sh
+source "$repo_root/shell/bash.sh"
+# shell/bash.sh shadows the exit builtin with a function; this script relies
+# on real `exit N` for its own control flow (every failing assertion below
+# calls it), so drop the override immediately and test its pieces by name
+# instead of ever exercising exit() itself.
+unset -f exit
 
 tmux() {
     if [[ "$1" == "run-shell" ]]; then
@@ -104,8 +111,17 @@ else
     printf 'not ok - dirty worktree is building\n' >&2
     exit 1
 fi
+
+watcher_apply_dirty "$window_id" "$scratch_repo"
+assert_equal "1" "$(tmux show-options -wqv -t "$window_id" @shipyard_dirty)" \
+    "dirty badge is set for an uncommitted worktree"
+
 watcher_apply_state "$window_id" building
 rm -f "$scratch_repo/untracked.txt"
+
+watcher_apply_dirty "$window_id" "$scratch_repo"
+assert_equal "" "$(tmux show-options -wqv -t "$window_id" @shipyard_dirty)" \
+    "dirty badge clears once the worktree is clean again"
 
 if watcher_should_build "$window_id" "$scratch_repo"; then
     printf 'ok - building remains sticky after worktree becomes clean\n'
@@ -242,7 +258,10 @@ if git -C "$sync_worktree" symbolic-ref -q HEAD >/dev/null; then
 fi
 printf 'ok - synced worktree stays detached\n'
 
-returned_lease=""
+# A file rather than a variable: shipyard_reap now captures `treehouse
+# return`'s output via $(...), which runs this mock in a subshell, so a
+# plain variable assignment here wouldn't survive back to the assertions.
+returned_lease_file="$test_tmp/returned-lease"
 treehouse() {
     case "$1" in
         get)
@@ -253,7 +272,7 @@ treehouse() {
             fi
             ;;
         return)
-            returned_lease="$2|$4"
+            printf '%s|%s' "$2" "$4" > "$returned_lease_file"
             ;;
     esac
 }
@@ -268,12 +287,357 @@ git() {
     command git "$@"
 }
 
+rm -f "$returned_lease_file"
 shipyard_record_lease "$window_id" "/tmp/test-worktree" "lease-123" "holder"
 tmux kill-window -t "$window_id"
 shipyard_reap "$window_id"
 assert_equal "/tmp/test-worktree|lease-123" \
-    "$returned_lease" \
+    "$(cat "$returned_lease_file" 2>/dev/null)" \
     "closed window returns exact lease"
+
+# `treehouse return` without --force exits 0 even when it declines (dirty
+# worktree, no TTY to answer "Clean and return?"), printing Aborted. reap
+# must not mistake that for success and delete the lease's only record.
+treehouse() {
+    case "$1" in
+        return)
+            printf 'Worktree has uncommitted changes. Clean and return? [Y/n] '
+            printf '\xf0\x9f\x8c\xb3 Aborted.\n'
+            ;;
+    esac
+}
+shipyard_record_lease "@aborted-test" "/tmp/aborted-worktree" "lease-aborted" "holder"
+if shipyard_reap "@aborted-test"; then
+    printf 'not ok - reap does not report success when treehouse return is declined\n' >&2
+    exit 1
+fi
+printf 'ok - reap does not report success when treehouse return is declined\n'
+if [[ -e "$(shipyard_state_home)/windows/lease-aborted.lease" ]]; then
+    printf 'ok - reap keeps the lease record when the return is declined\n'
+else
+    printf 'not ok - reap keeps the lease record when the return is declined\n' >&2
+    exit 1
+fi
+rm -f "$(shipyard_state_home)/windows/lease-aborted.lease"
+treehouse() {
+    case "$1" in
+        get)
+            if [[ "${5:-}" == *"setup failure"* ]]; then
+                printf '{"path":"%s","lease_id":"lease-failure"}\n' "$repo_root"
+            else
+                printf '{"path":"%s","lease_id":"lease-new"}\n' "$repo_root"
+            fi
+            ;;
+        return)
+            printf '%s|%s' "$2" "$4" > "$returned_lease_file"
+            ;;
+    esac
+}
+
+exit_worktree="$test_tmp/exit-guard-worktree"
+git init -q "$exit_worktree"
+git -C "$exit_worktree" -c user.email=test@example.com -c user.name=test \
+    commit -q --allow-empty -m initial
+
+tmux new-session -d -s exit-guard -n intent -c "$exit_worktree"
+exit_window="$(tmux display-message -p -t exit-guard '#{window_id}')"
+exit_pane="$(tmux display-message -p -t exit-guard '#{pane_id}')"
+
+if TMUX_PANE="$exit_pane" shipyard_exit_worktree_info >/dev/null 2>&1; then
+    printf 'not ok - exit guard is a no-op for a window with no lease\n' >&2
+    exit 1
+fi
+printf 'ok - exit guard is a no-op for a window with no lease\n'
+
+tmux set-option -w -t "$exit_window" @shipyard_lease_id "lease-exit-guard"
+tmux set-option -w -t "$exit_window" @shipyard_worktree "$exit_worktree"
+
+printf -v exit_info_expected '%s\t%s\t%s' "$exit_window" "$exit_worktree" "lease-exit-guard"
+assert_equal "$exit_info_expected" \
+    "$(TMUX_PANE="$exit_pane" shipyard_exit_worktree_info)" \
+    "exit guard identifies a leased window's worktree and lease"
+
+tmux split-window -t "$exit_window" -c "$exit_worktree"
+if TMUX_PANE="$exit_pane" shipyard_exit_worktree_info >/dev/null 2>&1; then
+    printf 'not ok - exit guard is a no-op when more than one pane remains\n' >&2
+    exit 1
+fi
+printf 'ok - exit guard is a no-op when more than one pane remains\n'
+tmux kill-pane -a -t "$exit_pane"
+
+rm -f "$returned_lease_file"
+shipyard_record_lease "$exit_window" "$exit_worktree" "lease-exit-guard" "holder"
+if shipyard_exit_should_proceed "$exit_window" "$exit_worktree" "lease-exit-guard"; then
+    printf 'ok - exit guard proceeds immediately on a clean worktree\n'
+else
+    printf 'not ok - exit guard proceeds immediately on a clean worktree\n' >&2
+    exit 1
+fi
+if [[ -e "$(shipyard_state_home)/windows/lease-exit-guard.lease" ]]; then
+    printf 'not ok - exit guard forgets the lease after returning a clean worktree\n' >&2
+    exit 1
+fi
+printf 'ok - exit guard forgets the lease after returning a clean worktree\n'
+
+treehouse() {
+    case "$1" in
+        return)
+            printf 'lease mismatch\n' >&2
+            return 1
+            ;;
+    esac
+}
+shipyard_record_lease "$exit_window" "$exit_worktree" "lease-exit-guard" "holder"
+if shipyard_exit_should_proceed "$exit_window" "$exit_worktree" "lease-exit-guard" 2>/dev/null; then
+    printf 'not ok - exit guard stops when a clean return fails\n' >&2
+    exit 1
+fi
+printf 'ok - exit guard stops when a clean return fails\n'
+if [[ -e "$(shipyard_state_home)/windows/lease-exit-guard.lease" ]]; then
+    printf 'ok - exit guard keeps the lease record after a clean return failure\n'
+else
+    printf 'not ok - exit guard keeps the lease record after a clean return failure\n' >&2
+    exit 1
+fi
+
+: > "$exit_worktree/dirty.txt"
+treehouse() {
+    case "$1" in
+        return)
+            printf 'Worktree has uncommitted changes. Clean and return? [Y/n] '
+            printf '\xf0\x9f\x8c\xb3 Aborted.\n'
+            ;;
+    esac
+}
+shipyard_record_lease "$exit_window" "$exit_worktree" "lease-exit-guard" "holder"
+if shipyard_exit_should_proceed "$exit_window" "$exit_worktree" "lease-exit-guard" 2>/dev/null; then
+    printf 'not ok - exit guard does not proceed when a dirty return is declined\n' >&2
+    exit 1
+fi
+printf 'ok - exit guard does not proceed when a dirty return is declined\n'
+if [[ -e "$(shipyard_state_home)/windows/lease-exit-guard.lease" ]]; then
+    printf 'ok - exit guard keeps the lease record when declined\n'
+else
+    printf 'not ok - exit guard keeps the lease record when declined\n' >&2
+    exit 1
+fi
+
+treehouse() {
+    case "$1" in
+        return)
+            printf 'lease mismatch\n' >&2
+            return 1
+            ;;
+    esac
+}
+if shipyard_exit_should_proceed "$exit_window" "$exit_worktree" "lease-exit-guard" 2>/dev/null; then
+    printf 'not ok - exit guard stops when a dirty return fails\n' >&2
+    exit 1
+fi
+printf 'ok - exit guard stops when a dirty return fails\n'
+if [[ -e "$(shipyard_state_home)/windows/lease-exit-guard.lease" ]]; then
+    printf 'ok - exit guard keeps the lease record after a dirty return failure\n'
+else
+    printf 'not ok - exit guard keeps the lease record after a dirty return failure\n' >&2
+    exit 1
+fi
+
+treehouse() {
+    case "$1" in
+        get)
+            if [[ "${5:-}" == *"setup failure"* ]]; then
+                printf '{"path":"%s","lease_id":"lease-failure"}\n' "$repo_root"
+            else
+                printf '{"path":"%s","lease_id":"lease-new"}\n' "$repo_root"
+            fi
+            ;;
+        return)
+            printf '%s|%s' "$2" "$4" > "$returned_lease_file"
+            ;;
+    esac
+}
+if shipyard_exit_should_proceed "$exit_window" "$exit_worktree" "lease-exit-guard"; then
+    printf 'ok - exit guard proceeds once a dirty return succeeds\n'
+else
+    printf 'not ok - exit guard proceeds once a dirty return succeeds\n' >&2
+    exit 1
+fi
+if [[ -e "$(shipyard_state_home)/windows/lease-exit-guard.lease" ]]; then
+    printf 'not ok - exit guard forgets the lease after a dirty return succeeds\n' >&2
+    exit 1
+fi
+printf 'ok - exit guard forgets the lease after a dirty return succeeds\n'
+
+# exit() is a function, so it also runs inside subshells/command
+# substitutions -- $(exit) only ends the subshell, but treehouse return and
+# rm aren't subshell-scoped, so without the BASHPID guard this would really
+# return and forget the lease while the top-level shell (and window) is
+# still attached to that worktree.
+shipyard_record_lease "$exit_window" "$exit_worktree" "lease-exit-guard" "holder"
+source "$repo_root/shell/bash.sh"
+(TMUX_PANE="$exit_pane" exit 0) 2>/dev/null || true
+unset -f exit
+if [[ -e "$(shipyard_state_home)/windows/lease-exit-guard.lease" ]]; then
+    printf 'ok - exit guard does not act from inside a subshell\n'
+else
+    printf 'not ok - exit guard does not act from inside a subshell\n' >&2
+    exit 1
+fi
+rm -f "$(shipyard_state_home)/windows/lease-exit-guard.lease"
+
+# kill-window on a session's last window already tears down the session.
+tmux kill-window -t "$exit_window" 2>/dev/null || true
+
+if TMUX_PANE="" shipyard_close 2>/dev/null; then
+    printf 'not ok - forge close requires a tmux window\n' >&2
+    exit 1
+fi
+printf 'ok - forge close requires a tmux window\n'
+
+tmux new-session -d -s close-test -n intent -c "$exit_worktree"
+close_window="$(tmux display-message -p -t close-test '#{window_id}')"
+close_pane="$(tmux display-message -p -t close-test '#{pane_id}')"
+
+if TMUX_PANE="$close_pane" shipyard_close 2>/dev/null; then
+    printf 'not ok - forge close requires a leased window\n' >&2
+    exit 1
+fi
+printf 'ok - forge close requires a leased window\n'
+
+no_mistakes_active=0
+no_mistakes_aborted_file="$test_tmp/no-mistakes-aborted"
+rm -f "$no_mistakes_aborted_file"
+no-mistakes() {
+    case "$1" in
+        axi)
+            case "${2:-}" in
+                status)
+                    if [[ "$no_mistakes_active" -eq 1 ]]; then
+                        printf 'run:\n  status: running\n'
+                    else
+                        printf 'run:\n  status: completed\noutcome: passed\n'
+                    fi
+                    ;;
+                abort)
+                    : > "$no_mistakes_aborted_file"
+                    ;;
+            esac
+            ;;
+    esac
+}
+
+tmux set-option -w -t "$close_window" @shipyard_worktree "$exit_worktree"
+tmux set-option -w -t "$close_window" @shipyard_lease_id "lease-close-test"
+rm -f "$returned_lease_file"
+shipyard_record_lease "$close_window" "$exit_worktree" "lease-close-test" "holder"
+shipyard_record_lease "%unrelated" "$exit_worktree" "zz-unrelated" "holder"
+
+export test_socket test_tmp returned_lease_file no_mistakes_active no_mistakes_aborted_file
+export -f tmux treehouse no-mistakes shipyard_close shipyard_forget_lease shipyard_state_home
+if TMUX_PANE="$close_pane" bash -e -c 'shipyard_close' 2>/dev/null; then
+    printf 'ok - forge close returns the lease and closes a clean window\n'
+else
+    printf 'not ok - forge close returns the lease and closes a clean window\n' >&2
+    exit 1
+fi
+assert_equal "$exit_worktree|lease-close-test" "$(cat "$returned_lease_file" 2>/dev/null)" \
+    "forge close force-returns the lease"
+if tmux list-windows -a -F '#{window_id}' 2>/dev/null | grep -Fxq "$close_window"; then
+    printf 'not ok - forge close actually closes the window\n' >&2
+    exit 1
+fi
+printf 'ok - forge close actually closes the window\n'
+if [[ -e "$(shipyard_state_home)/windows/lease-close-test.lease" ]]; then
+    printf 'not ok - forge close forgets the lease record\n' >&2
+    exit 1
+fi
+printf 'ok - forge close forgets the lease record\n'
+if [[ ! -e "$(shipyard_state_home)/windows/zz-unrelated.lease" ]]; then
+    printf 'not ok - forge close preserves unrelated lease records\n' >&2
+    exit 1
+fi
+printf 'ok - forge close preserves unrelated lease records under errexit\n'
+rm -f "$(shipyard_state_home)/windows/zz-unrelated.lease"
+if [[ -e "$no_mistakes_aborted_file" ]]; then
+    printf 'not ok - forge close does not abort a no-mistakes run that already reached an outcome\n' >&2
+    exit 1
+fi
+printf 'ok - forge close does not abort a no-mistakes run that already reached an outcome\n'
+
+tmux new-session -d -s close-test -n intent -c "$exit_worktree"
+close_window="$(tmux display-message -p -t close-test '#{window_id}')"
+close_pane="$(tmux display-message -p -t close-test '#{pane_id}')"
+tmux set-option -w -t "$close_window" @shipyard_worktree "$exit_worktree"
+tmux set-option -w -t "$close_window" @shipyard_lease_id "lease-close-test"
+shipyard_record_lease "$close_window" "$exit_worktree" "lease-close-test" "holder"
+: > "$exit_worktree/dirty-close.txt"
+no_mistakes_active=1
+rm -f "$no_mistakes_aborted_file"
+
+close_stderr="$(TMUX_PANE="$close_pane" shipyard_close 2>&1 1>/dev/null)"
+case "$close_stderr" in
+    *"aborting the active no-mistakes run"*"discarding uncommitted changes"*)
+        printf 'ok - forge close warns and aborts an active run before closing a dirty window\n'
+        ;;
+    *)
+        printf 'not ok - forge close warns and aborts an active run before closing a dirty window\n%s\n' \
+            "$close_stderr" >&2
+        exit 1
+        ;;
+esac
+if [[ -e "$no_mistakes_aborted_file" ]]; then
+    printf 'ok - forge close aborts a genuinely active no-mistakes run\n'
+else
+    printf 'not ok - forge close aborts a genuinely active no-mistakes run\n' >&2
+    exit 1
+fi
+no_mistakes_active=0
+rm -f "$exit_worktree/dirty-close.txt"
+
+tmux new-session -d -s close-test -n intent -c "$exit_worktree"
+close_window="$(tmux display-message -p -t close-test '#{window_id}')"
+close_pane="$(tmux display-message -p -t close-test '#{pane_id}')"
+tmux set-option -w -t "$close_window" @shipyard_worktree "$exit_worktree"
+tmux set-option -w -t "$close_window" @shipyard_lease_id "lease-close-test"
+shipyard_record_lease "$close_window" "$exit_worktree" "lease-close-test" "holder"
+treehouse() {
+    case "$1" in
+        get)
+            printf '{"path":"%s","lease_id":"lease-new"}\n' "$repo_root"
+            ;;
+        return)
+            printf 'lease id mismatch\n' >&2
+            return 1
+            ;;
+    esac
+}
+if TMUX_PANE="$close_pane" shipyard_close 2>/dev/null; then
+    printf 'not ok - forge close does not close the window when the return fails\n' >&2
+    exit 1
+fi
+printf 'ok - forge close does not close the window when the return fails\n'
+if tmux list-windows -a -F '#{window_id}' 2>/dev/null | grep -Fxq "$close_window"; then
+    printf 'ok - window survives a failed force-return\n'
+else
+    printf 'not ok - window survives a failed force-return\n' >&2
+    exit 1
+fi
+tmux kill-window -t "$close_window" 2>/dev/null || true
+unset -f no-mistakes
+treehouse() {
+    case "$1" in
+        get)
+            if [[ "${5:-}" == *"setup failure"* ]]; then
+                printf '{"path":"%s","lease_id":"lease-failure"}\n' "$repo_root"
+            else
+                printf '{"path":"%s","lease_id":"lease-new"}\n' "$repo_root"
+            fi
+            ;;
+        return)
+            printf '%s|%s' "$2" "$4" > "$returned_lease_file"
+            ;;
+    esac
+}
 
 tmux new-session -d -s app -n existing
 tmux set-option -t app @shipyard_project_root "/client/app"
@@ -395,7 +759,7 @@ case "$watcher_launch" in
         ;;
 esac
 
-returned_lease=""
+rm -f "$returned_lease_file"
 fail_new_window=1
 if TMUX="test" shipyard_new "setup failure"; then
     printf 'not ok - failed tmux setup returns its pending lease\n' >&2
@@ -403,7 +767,7 @@ if TMUX="test" shipyard_new "setup failure"; then
 fi
 fail_new_window=0
 assert_equal "$repo_root|lease-failure" \
-    "$returned_lease" \
+    "$(cat "$returned_lease_file" 2>/dev/null)" \
     "failed tmux setup returns its pending lease"
 
 watch_iterations=0
