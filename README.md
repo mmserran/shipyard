@@ -50,8 +50,9 @@ warns and continues from the worktree's existing checkout.
 The first unit creates the project session directly. Run the agent or
 development command of your choice from the new shell.
 
-Closing the window returns its Treehouse lease. Shipyard also reconciles stale
-lease records on the next `forge new` after an abnormal tmux or machine exit.
+Closing a clean window returns its Treehouse lease. If automatic cleanup
+cannot return a lease, Shipyard keeps the cleanup record and retries during
+the next `forge new`.
 
 ## Closing a unit of work
 
@@ -71,12 +72,8 @@ for it first (so its daemon isn't left tracking a worktree Treehouse is about
 to reset and hand to a different unit of work), discards uncommitted changes,
 and returns the lease. Running the command at all is the explicit signal to
 discard, so it doesn't prompt — but it does report what it's discarding.
-
-Either way not resolving cleanly (declined at exit, or the return itself
-fails in `forge close`) is what used to leak Treehouse pool slots silently:
-`treehouse return` without `--force` exits 0 even when it declines, so
-trusting the exit code alone deleted Shipyard's only record of the lease
-while Treehouse still held it. Both paths now check the actual output.
+If returning the lease fails, the window stays open and its cleanup record is
+preserved.
 
 ## Open a project's command window
 
