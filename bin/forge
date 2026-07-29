@@ -28,7 +28,15 @@ Shipyard coordinates AI-powered software development workflows.
 Usage:
   forge open [path]   Open (or create) a project's tmux session and its
                        command window; defaults to the current directory
-  forge new <intent>  Create an intent window in a leased Treehouse worktree
+  forge new [--new-deps] <intent>
+                       Create an intent window in a leased Treehouse worktree.
+                       node_modules is symlinked to the root checkout's
+                       unless --new-deps requests an independent copy.
+
+  forge new-deps       Swap this worktree's node_modules for an independent,
+                       writable directory
+  forge no-new-deps    Swap this worktree's node_modules back to a symlink
+                       shared with the root checkout
 
   forge publish-screenshot <file> [<file> ...]
                        Upload screenshot(s) to a rolling GitHub Release and
@@ -54,6 +62,24 @@ main() {
         new)
             shift
             shipyard_new "$@"
+            ;;
+
+        new-deps)
+            local worktree_root
+            worktree_root="$(shipyard_worktree_root)" || {
+                printf 'forge: not inside a git worktree\n' >&2
+                return 1
+            }
+            shipyard_unlink_node_modules "$worktree_root"
+            ;;
+
+        no-new-deps)
+            local worktree_root
+            worktree_root="$(shipyard_worktree_root)" || {
+                printf 'forge: not inside a git worktree\n' >&2
+                return 1
+            }
+            shipyard_link_node_modules "$worktree_root"
             ;;
 
         publish-screenshot)

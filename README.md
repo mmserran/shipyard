@@ -40,9 +40,11 @@ Shipyard:
 4. creates an intent window rooted in that worktree, split into a top pane
    (75% of the height) for the main work and a bottom pane (25%) for a
    secondary tool, with focus on the top pane;
-5. records enough lease identity for safe automatic cleanup;
-6. starts a state watcher; and
-7. opens an ordinary shell without starting an agent.
+5. symlinks the worktree's `node_modules` to the root checkout's, when the
+   root has a `package.json` and an existing `node_modules` directory;
+6. records enough lease identity for safe automatic cleanup;
+7. starts a state watcher; and
+8. opens an ordinary shell without starting an agent.
 
 If the remote's default branch cannot be resolved or fetched, `forge new`
 warns and continues from the worktree's existing checkout.
@@ -52,6 +54,44 @@ development command of your choice from the new shell.
 
 Closing the window returns its Treehouse lease. Shipyard also reconciles stale
 lease records on the next `forge new` after an abnormal tmux or machine exit.
+
+## Shared node_modules
+
+Treehouse-provisioned worktrees copy the repository, including
+`node_modules`; that copy can end up truncated or missing files, especially
+for large native-addon packages. `forge new` sidesteps this by symlinking a
+Node worktree's `node_modules` to its root checkout's instead of leaving
+Treehouse's copy in place, so nothing gets copied and there's nothing to
+truncate.
+
+Because the symlink makes the worktree's `node_modules` the *same directory*
+as root's, the `install` (`i`), `ci`, `add`, `update` (`up`), `remove` (`rm`),
+`uninstall` (`un`), `dedupe`, and `prune` npm subcommands are disabled inside
+a linked worktree. The `bin/npm` shim on `PATH` detects a symlinked
+`node_modules` and blocks only those subcommands, passing everything else
+(`run`, `test`, `ls`, ...) through untouched. This holds regardless of which
+agent, tool, or human is driving the worktree's shell, since it isn't tied to
+any one agent's permission config.
+
+npm has far more global options than the shim can enumerate, so it fails
+closed: a recognized option (`--prefix`, `--tag`, `--force`, ...) is parsed
+correctly, but an unrecognized one makes the shim unable to confirm the
+invocation is safe, and it blocks rather than guess.
+
+```bash
+forge new --new-deps nav-header   # skip linking; this worktree gets its own
+                                   # independent, writable node_modules
+forge new-deps                    # mid-session: swap a linked worktree's
+                                   # node_modules for an empty writable directory
+forge no-new-deps                 # mid-session: swap back to the symlink
+                                   # shared with the root checkout
+```
+
+`forge new-deps` and `forge no-new-deps` run from inside a worktree's shell
+and operate on it. `no-new-deps` warns (but does not block) if the worktree's
+`package-lock.json` differs from root's, since a shared `node_modules` only
+makes sense when the dependency trees actually agree. Neither command runs
+`npm install` on your behalf.
 
 ## Open a project's command window
 
@@ -148,7 +188,9 @@ history.
 
 ```text
 forge open [path]
-forge new <intent>
+forge new [--new-deps] <intent>
+forge new-deps
+forge no-new-deps
 forge build  # manually override the state to building
 forge alert
 forge status
@@ -161,8 +203,10 @@ automatic state management.
 ## Architecture
 
 - `bin/forge` routes the CLI.
-- `lib/session.sh` creates project sessions, leases worktrees, and records
-  cleanup metadata.
+- `bin/npm` guards a worktree's shared `node_modules` from mutating npm
+  subcommands; installed on `PATH` alongside `forge`.
+- `lib/session.sh` creates project sessions, leases worktrees, links/unlinks
+  shared `node_modules`, and records cleanup metadata.
 - `lib/context.sh` maintains pane repository and branch context.
 - `lib/pipeline.sh` maps effective states to tmux badges.
 - `lib/watcher.sh` derives validation and PR states.
