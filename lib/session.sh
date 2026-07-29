@@ -165,8 +165,60 @@ shipyard_sync_worktree() {
     git -C "$worktree" checkout --quiet --detach "origin/$base_branch" 2>/dev/null || return 1
 }
 
+shipyard_worktree_root() {
+    git rev-parse --show-toplevel 2>/dev/null
+}
+
+# Symlinks a worktree's node_modules to its root checkout's, so npm never has
+# to copy (and potentially truncate) it. A no-op for non-Node projects (no
+# root package.json) and for worktrees that are themselves the root checkout.
+shipyard_link_node_modules() {
+    local worktree="$1"
+    local root
+    local target
+
+    root="$(shipyard_project_root "$worktree")" || return
+    [[ "$root" == "$worktree" ]] && return 0
+    [[ -e "$root/package.json" ]] || return 0
+
+    if [[ ! -d "$root/node_modules" ]]; then
+        printf 'forge: no node_modules in %s yet; skipping node_modules link\n' "$root" >&2
+        return 0
+    fi
+
+    target="$worktree/node_modules"
+    [[ -L "$target" ]] && return 0
+
+    if [[ -e "$target" ]]; then
+        mv "$target" "${target}.pre-link.$(date +%s)"
+    fi
+    ln -s "$root/node_modules" "$target"
+
+    if [[ -f "$root/package-lock.json" && -f "$worktree/package-lock.json" ]] \
+        && ! cmp -s "$root/package-lock.json" "$worktree/package-lock.json"; then
+        printf 'forge: warning: package-lock.json in %s differs from root; shared node_modules may not match this branch'"'"'s dependencies\n' \
+            "$worktree" >&2
+    fi
+}
+
+# Swaps a worktree's node_modules back out for a real, independent directory,
+# so npm install can be used freely without mutating the root checkout's.
+shipyard_unlink_node_modules() {
+    local worktree="$1"
+    local target="$worktree/node_modules"
+
+    if [[ -L "$target" ]]; then
+        rm "$target"
+    elif [[ -e "$target" ]]; then
+        printf 'forge: node_modules in %s is not a shared link; nothing to do\n' "$worktree" >&2
+        return 0
+    fi
+    mkdir -p "$target"
+}
+
 shipyard_new() {
-    local intent="${*:-}"
+    local new_deps=0
+    local intent
     local project_root
     local session_name
     local lease_holder
@@ -180,8 +232,21 @@ shipyard_new() {
     local base_branch
     local top_pane_id
 
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --new-deps)
+                new_deps=1
+                shift
+                ;;
+            *)
+                break
+                ;;
+        esac
+    done
+    intent="${*:-}"
+
     if [[ -z "$intent" ]]; then
-        printf 'forge: usage: forge new <intent>\n' >&2
+        printf 'forge: usage: forge new [--new-deps] <intent>\n' >&2
         return 2
     fi
 
@@ -213,6 +278,10 @@ shipyard_new() {
         fi
     else
         printf 'forge: warning: could not determine origin'"'"'s default branch; continuing with the worktree'"'"'s current checkout\n' >&2
+    fi
+
+    if [[ "$new_deps" -eq 0 ]]; then
+        shipyard_link_node_modules "$worktree" || true
     fi
 
     lease_id="$(sed -n 's/.*"lease_id"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' <<<"$lease_json")"

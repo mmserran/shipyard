@@ -305,6 +305,85 @@ reused_session="$(shipyard_session_for_project "$(shipyard_project_root "$linked
 assert_equal "worktree-repo" "$reused_session" \
     "forge new from inside a linked worktree reuses the project's existing session"
 
+nm_root="$test_tmp/nm-root"
+git init -q "$nm_root"
+git -C "$nm_root" -c user.email=test@example.com -c user.name=test \
+    commit -q --allow-empty -m initial
+mkdir -p "$nm_root/node_modules"
+: > "$nm_root/node_modules/marker"
+printf '{"name":"nm-root"}\n' > "$nm_root/package.json"
+printf '{"lockfileVersion":3}\n' > "$nm_root/package-lock.json"
+nm_root_canonical="$(cd "$nm_root" && pwd -P)"
+
+nm_worktree="$test_tmp/nm-worktree"
+git -C "$nm_root" worktree add -q --detach "$nm_worktree"
+
+shipyard_link_node_modules "$nm_worktree"
+if [[ -L "$nm_worktree/node_modules" ]] \
+    && [[ "$(readlink "$nm_worktree/node_modules")" == "$nm_root_canonical/node_modules" ]]; then
+    printf 'ok - no-new-deps symlinks the worktree'"'"'s node_modules to the root checkout\n'
+else
+    printf 'not ok - no-new-deps symlinks the worktree'"'"'s node_modules to the root checkout\n' >&2
+    exit 1
+fi
+
+shipyard_link_node_modules "$nm_worktree"
+assert_equal "$nm_root_canonical/node_modules" "$(readlink "$nm_worktree/node_modules")" \
+    "no-new-deps is idempotent once already linked"
+
+shipyard_unlink_node_modules "$nm_worktree"
+if [[ -d "$nm_worktree/node_modules" && ! -L "$nm_worktree/node_modules" ]]; then
+    printf 'ok - new-deps restores a real, independent node_modules directory\n'
+else
+    printf 'not ok - new-deps restores a real, independent node_modules directory\n' >&2
+    exit 1
+fi
+
+: > "$nm_worktree/node_modules/leftover"
+shipyard_link_node_modules "$nm_worktree"
+if [[ -L "$nm_worktree/node_modules" ]] \
+    && compgen -G "$nm_worktree/node_modules.pre-link.*" > /dev/null; then
+    printf 'ok - no-new-deps preserves a pre-existing real node_modules instead of deleting it\n'
+else
+    printf 'not ok - no-new-deps preserves a pre-existing real node_modules instead of deleting it\n' >&2
+    exit 1
+fi
+rm -rf "$nm_worktree"/node_modules.pre-link.*
+
+nm_no_pkg_root="$test_tmp/nm-no-pkg-root"
+git init -q "$nm_no_pkg_root"
+git -C "$nm_no_pkg_root" -c user.email=test@example.com -c user.name=test \
+    commit -q --allow-empty -m initial
+nm_no_pkg_worktree="$test_tmp/nm-no-pkg-worktree"
+git -C "$nm_no_pkg_root" worktree add -q --detach "$nm_no_pkg_worktree"
+shipyard_link_node_modules "$nm_no_pkg_worktree"
+if [[ -e "$nm_no_pkg_worktree/node_modules" ]]; then
+    printf 'not ok - no-new-deps is a no-op for a non-Node project\n' >&2
+    exit 1
+fi
+printf 'ok - no-new-deps is a no-op for a non-Node project\n'
+
+nm_mismatch_worktree="$test_tmp/nm-mismatch-worktree"
+git -C "$nm_root" worktree add -q --detach "$nm_mismatch_worktree"
+printf '{"lockfileVersion":3,"different":true}\n' > "$nm_mismatch_worktree/package-lock.json"
+mismatch_warning="$(shipyard_link_node_modules "$nm_mismatch_worktree" 2>&1 1>/dev/null)"
+case "$mismatch_warning" in
+    *"package-lock.json"*"differs"*)
+        printf 'ok - no-new-deps warns (but does not block) on a package-lock.json mismatch\n'
+        ;;
+    *)
+        printf 'not ok - no-new-deps warns (but does not block) on a package-lock.json mismatch\n%s\n' \
+            "$mismatch_warning" >&2
+        exit 1
+        ;;
+esac
+if [[ -L "$nm_mismatch_worktree/node_modules" ]]; then
+    printf 'ok - lockfile mismatch warning does not block linking\n'
+else
+    printf 'not ok - lockfile mismatch warning does not block linking\n' >&2
+    exit 1
+fi
+
 bare_repo="$test_tmp/bare-repo.git"
 git init -q --bare "$bare_repo"
 git -C "$worktree_repo" remote add bare-test "$bare_repo"
@@ -406,6 +485,41 @@ assert_equal "$repo_root|lease-failure" \
     "$returned_lease" \
     "failed tmux setup returns its pending lease"
 
+nm_worktree_new_deps_flag="$test_tmp/nm-worktree-new-deps-flag"
+git -C "$nm_root" worktree add -q --detach "$nm_worktree_new_deps_flag"
+nm_worktree_shared_flag="$test_tmp/nm-worktree-shared-flag"
+git -C "$nm_root" worktree add -q --detach "$nm_worktree_shared_flag"
+
+nm_flag_target_worktree=""
+treehouse() {
+    case "$1" in
+        get)
+            printf '{"path":"%s","lease_id":"lease-nm-flag"}\n' "$nm_flag_target_worktree"
+            ;;
+        return)
+            :
+            ;;
+    esac
+}
+
+nm_flag_target_worktree="$nm_worktree_new_deps_flag"
+TMUX="test" shipyard_new --new-deps "flag test new deps"
+if [[ ! -L "$nm_worktree_new_deps_flag/node_modules" ]]; then
+    printf 'ok - forge new --new-deps leaves node_modules independent\n'
+else
+    printf 'not ok - forge new --new-deps leaves node_modules independent\n' >&2
+    exit 1
+fi
+
+nm_flag_target_worktree="$nm_worktree_shared_flag"
+TMUX="test" shipyard_new "flag test shared deps"
+if [[ -L "$nm_worktree_shared_flag/node_modules" ]]; then
+    printf 'ok - forge new links node_modules to root by default\n'
+else
+    printf 'not ok - forge new links node_modules to root by default\n' >&2
+    exit 1
+fi
+
 watch_iterations=0
 watcher_window_exists() {
     ((watch_iterations++ == 0))
@@ -458,5 +572,66 @@ case "$split_window_launch" in
         exit 1
         ;;
 esac
+
+npm_stub_dir="$test_tmp/npm-stub"
+mkdir -p "$npm_stub_dir"
+cat > "$npm_stub_dir/npm" <<'EOF'
+#!/usr/bin/env bash
+printf 'real-npm-called %s\n' "$*"
+EOF
+chmod +x "$npm_stub_dir/npm"
+npm_path="$SHIPYARD_HOME/bin:$npm_stub_dir:$PATH"
+
+npm_scenario_dir="$test_tmp/npm-scenario"
+mkdir -p "$npm_scenario_dir/node_modules"
+npm_out="$(cd "$npm_scenario_dir" && PATH="$npm_path" "$repo_root/bin/npm" install)"
+assert_equal "real-npm-called install" "$npm_out" \
+    "npm shim passes install through when node_modules is a real directory"
+
+rm -rf "$npm_scenario_dir/node_modules"
+mkdir -p "$test_tmp/npm-scenario-shared-nm"
+ln -s "$test_tmp/npm-scenario-shared-nm" "$npm_scenario_dir/node_modules"
+
+if npm_err="$(cd "$npm_scenario_dir" && PATH="$npm_path" "$repo_root/bin/npm" install 2>&1 1>/dev/null)"; then
+    printf 'not ok - npm shim blocks install against a symlinked node_modules\n' >&2
+    exit 1
+fi
+case "$npm_err" in
+    *"symlinked to the root checkout"*)
+        printf 'ok - npm shim blocks install against a symlinked node_modules\n'
+        ;;
+    *)
+        printf 'not ok - npm shim blocks install against a symlinked node_modules\n%s\n' \
+            "$npm_err" >&2
+        exit 1
+        ;;
+esac
+
+npm_out2="$(cd "$npm_scenario_dir" && PATH="$npm_path" "$repo_root/bin/npm" run build)"
+assert_equal "real-npm-called run build" "$npm_out2" \
+    "npm shim passes non-mutating subcommands through even when node_modules is symlinked"
+
+for npm_blocked_cmd in ci add update rm dedupe; do
+    if npm_err="$(cd "$npm_scenario_dir" && PATH="$npm_path" "$repo_root/bin/npm" "$npm_blocked_cmd" 2>&1 1>/dev/null)"; then
+        printf 'not ok - npm shim blocks npm %s against a symlinked node_modules\n' \
+            "$npm_blocked_cmd" >&2
+        exit 1
+    fi
+    case "$npm_err" in
+        *"disabled in this worktree"*) ;;
+        *)
+            printf 'not ok - npm shim blocks npm %s against a symlinked node_modules\n%s\n' \
+                "$npm_blocked_cmd" "$npm_err" >&2
+            exit 1
+            ;;
+    esac
+done
+printf 'ok - npm shim blocks all configured mutating subcommands\n'
+
+npm_none_dir="$test_tmp/npm-scenario-none"
+mkdir -p "$npm_none_dir"
+npm_out3="$(cd "$npm_none_dir" && PATH="$npm_path" "$repo_root/bin/npm" install)"
+assert_equal "real-npm-called install" "$npm_out3" \
+    "npm shim passes install through in a non-Node directory tree"
 
 printf 'all tests passed\n'
