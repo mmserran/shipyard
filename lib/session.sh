@@ -187,18 +187,19 @@ shipyard_link_node_modules() {
     fi
 
     target="$worktree/node_modules"
-    [[ -L "$target" ]] && return 0
-
-    if [[ -e "$target" ]]; then
-        mv "$target" "${target}.pre-link.$(date +%s)"
-    fi
-    ln -s "$root/node_modules" "$target"
 
     if [[ -f "$root/package-lock.json" && -f "$worktree/package-lock.json" ]] \
         && ! cmp -s "$root/package-lock.json" "$worktree/package-lock.json"; then
         printf 'forge: warning: package-lock.json in %s differs from root; shared node_modules may not match this branch'"'"'s dependencies\n' \
             "$worktree" >&2
     fi
+
+    [[ -L "$target" ]] && return 0
+
+    if [[ -e "$target" ]]; then
+        mv "$target" "${target}.pre-link.$(date +%s)"
+    fi
+    ln -s "$root/node_modules" "$target"
 }
 
 # Swaps a worktree's node_modules back out for a real, independent directory,

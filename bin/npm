@@ -39,7 +39,39 @@ npm_guard_real_npm() {
     return 1
 }
 
+npm_guard_command() {
+    local arg
+    local skip_value=0
+
+    for arg in "$@"; do
+        if [[ "$skip_value" -eq 1 ]]; then
+            skip_value=0
+            continue
+        fi
+
+        case "$arg" in
+            --)
+                continue
+                ;;
+            --prefix|--cache|--userconfig|--globalconfig|--registry|--scope|--workspace|--loglevel|--otp)
+                skip_value=1
+                ;;
+            -C|-w)
+                skip_value=1
+                ;;
+            --*=*|-*)
+                ;;
+            *)
+                printf '%s\n' "$arg"
+                return 0
+                ;;
+        esac
+    done
+    return 1
+}
+
 main() {
+    local command
     local real_npm
     local node_modules
 
@@ -48,11 +80,12 @@ main() {
         exit 1
     fi
 
+    command="$(npm_guard_command "$@" || true)"
     if node_modules="$(npm_guard_nearest_node_modules)" && [[ -L "$node_modules" ]]; then
-        case "${1:-}" in
+        case "$command" in
             install|i|ci|add|update|up|remove|rm|uninstall|un|dedupe|prune)
                 printf 'npm %s is disabled in this worktree: node_modules is symlinked to the root checkout.\n' \
-                    "$1" >&2
+                    "$command" >&2
                 printf "Run it in the root checkout instead, or 'forge new-deps' first if this branch changes dependencies.\n" >&2
                 exit 1
                 ;;

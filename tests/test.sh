@@ -331,6 +331,20 @@ shipyard_link_node_modules "$nm_worktree"
 assert_equal "$nm_root_canonical/node_modules" "$(readlink "$nm_worktree/node_modules")" \
     "no-new-deps is idempotent once already linked"
 
+printf '{"lockfileVersion":3,"changed":true}\n' > "$nm_worktree/package-lock.json"
+linked_mismatch_warning="$(shipyard_link_node_modules "$nm_worktree" 2>&1 1>/dev/null)"
+case "$linked_mismatch_warning" in
+    *"package-lock.json"*"differs"*)
+        printf 'ok - no-new-deps warns on a mismatch when already linked\n'
+        ;;
+    *)
+        printf 'not ok - no-new-deps warns on a mismatch when already linked\n%s\n' \
+            "$linked_mismatch_warning" >&2
+        exit 1
+        ;;
+esac
+printf '{"lockfileVersion":3}\n' > "$nm_worktree/package-lock.json"
+
 shipyard_unlink_node_modules "$nm_worktree"
 if [[ -d "$nm_worktree/node_modules" && ! -L "$nm_worktree/node_modules" ]]; then
     printf 'ok - new-deps restores a real, independent node_modules directory\n'
@@ -606,6 +620,24 @@ case "$npm_err" in
         exit 1
         ;;
 esac
+
+for npm_guard_args in "--silent install" "--prefix . install" "-C . ci"; do
+    read -r -a npm_guard_argv <<<"$npm_guard_args"
+    if npm_err="$(cd "$npm_scenario_dir" && PATH="$npm_path" "$repo_root/bin/npm" "${npm_guard_argv[@]}" 2>&1 1>/dev/null)"; then
+        printf 'not ok - npm shim blocks mutating commands after global options: %s\n' \
+            "$npm_guard_args" >&2
+        exit 1
+    fi
+    case "$npm_err" in
+        *"disabled in this worktree"*) ;;
+        *)
+            printf 'not ok - npm shim blocks mutating commands after global options: %s\n%s\n' \
+                "$npm_guard_args" "$npm_err" >&2
+            exit 1
+            ;;
+    esac
+done
+printf 'ok - npm shim finds mutating commands after global options\n'
 
 npm_out2="$(cd "$npm_scenario_dir" && PATH="$npm_path" "$repo_root/bin/npm" run build)"
 assert_equal "real-npm-called run build" "$npm_out2" \
