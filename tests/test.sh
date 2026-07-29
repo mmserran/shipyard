@@ -379,6 +379,27 @@ if [[ -e "$(shipyard_state_home)/windows/lease-exit-guard.lease" ]]; then
 fi
 printf 'ok - exit guard forgets the lease after returning a clean worktree\n'
 
+treehouse() {
+    case "$1" in
+        return)
+            printf 'lease mismatch\n' >&2
+            return 1
+            ;;
+    esac
+}
+shipyard_record_lease "$exit_window" "$exit_worktree" "lease-exit-guard" "holder"
+if shipyard_exit_should_proceed "$exit_window" "$exit_worktree" "lease-exit-guard" 2>/dev/null; then
+    printf 'not ok - exit guard stops when a clean return fails\n' >&2
+    exit 1
+fi
+printf 'ok - exit guard stops when a clean return fails\n'
+if [[ -e "$(shipyard_state_home)/windows/lease-exit-guard.lease" ]]; then
+    printf 'ok - exit guard keeps the lease record after a clean return failure\n'
+else
+    printf 'not ok - exit guard keeps the lease record after a clean return failure\n' >&2
+    exit 1
+fi
+
 : > "$exit_worktree/dirty.txt"
 treehouse() {
     case "$1" in
@@ -398,6 +419,26 @@ if [[ -e "$(shipyard_state_home)/windows/lease-exit-guard.lease" ]]; then
     printf 'ok - exit guard keeps the lease record when declined\n'
 else
     printf 'not ok - exit guard keeps the lease record when declined\n' >&2
+    exit 1
+fi
+
+treehouse() {
+    case "$1" in
+        return)
+            printf 'lease mismatch\n' >&2
+            return 1
+            ;;
+    esac
+}
+if shipyard_exit_should_proceed "$exit_window" "$exit_worktree" "lease-exit-guard" 2>/dev/null; then
+    printf 'not ok - exit guard stops when a dirty return fails\n' >&2
+    exit 1
+fi
+printf 'ok - exit guard stops when a dirty return fails\n'
+if [[ -e "$(shipyard_state_home)/windows/lease-exit-guard.lease" ]]; then
+    printf 'ok - exit guard keeps the lease record after a dirty return failure\n'
+else
+    printf 'not ok - exit guard keeps the lease record after a dirty return failure\n' >&2
     exit 1
 fi
 

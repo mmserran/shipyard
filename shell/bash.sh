@@ -56,26 +56,36 @@ shipyard_exit_should_proceed() {
     local worktree="$2"
     local lease_id="$3"
     local transcript
+    local return_output
+    local return_status
 
     if [[ -z "$(git -C "$worktree" status --porcelain 2>/dev/null)" ]]; then
-        treehouse return "$worktree" --if-lease-id "$lease_id" >/dev/null 2>&1 || true
-        shipyard_forget_lease "$window_id"
-        return 0
-    fi
-
-    # Without --force, `treehouse return` exits 0 even when it declines --
-    # same as shipyard_reap, this can't trust the exit code alone. Unlike
-    # shipyard_reap, though, a real person needs to see the prompt and
-    # answer it live, so the output can't just be captured away either:
-    # tee shows it on the real terminal while also keeping a copy to check.
-    transcript="$(mktemp)"
-    treehouse return "$worktree" --if-lease-id "$lease_id" 2>&1 | tee "$transcript" || true
-    if ! grep -q Aborted "$transcript"; then
+        if return_output="$(treehouse return "$worktree" --if-lease-id "$lease_id" 2>&1)"; then
+            return_status=0
+        else
+            return_status=$?
+        fi
+        if [[ "$return_status" -eq 0 && "$return_output" != *Aborted* ]]; then
+            shipyard_forget_lease "$window_id"
+            return 0
+        fi
+        [[ -z "$return_output" ]] || printf '%s\n' "$return_output" >&2
+    else
+        # Without --force, `treehouse return` exits 0 even when it declines --
+        # same as shipyard_reap, this can't trust the exit code alone. Unlike
+        # shipyard_reap, though, a real person needs to see the prompt and
+        # answer it live, so the output can't just be captured away either:
+        # tee shows it on the real terminal while also keeping a copy to check.
+        transcript="$(mktemp)" || return 1
+        treehouse return "$worktree" --if-lease-id "$lease_id" 2>&1 | tee "$transcript"
+        return_status=${PIPESTATUS[0]}
+        if [[ "$return_status" -eq 0 ]] && ! grep -q Aborted "$transcript"; then
+            rm -f "$transcript"
+            shipyard_forget_lease "$window_id"
+            return 0
+        fi
         rm -f "$transcript"
-        shipyard_forget_lease "$window_id"
-        return 0
     fi
-    rm -f "$transcript"
 
     printf 'forge: not exiting -- commit, stash, or discard your changes first.\n' >&2
     return 1
