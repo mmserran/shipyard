@@ -513,8 +513,11 @@ tmux set-option -w -t "$close_window" @shipyard_worktree "$exit_worktree"
 tmux set-option -w -t "$close_window" @shipyard_lease_id "lease-close-test"
 rm -f "$returned_lease_file"
 shipyard_record_lease "$close_window" "$exit_worktree" "lease-close-test" "holder"
+shipyard_record_lease "%unrelated" "$exit_worktree" "zz-unrelated" "holder"
 
-if TMUX_PANE="$close_pane" shipyard_close 2>/dev/null; then
+export test_socket test_tmp returned_lease_file no_mistakes_active no_mistakes_aborted_file
+export -f tmux treehouse no-mistakes shipyard_close shipyard_forget_lease shipyard_state_home
+if TMUX_PANE="$close_pane" bash -e -c 'shipyard_close' 2>/dev/null; then
     printf 'ok - forge close returns the lease and closes a clean window\n'
 else
     printf 'not ok - forge close returns the lease and closes a clean window\n' >&2
@@ -532,6 +535,12 @@ if [[ -e "$(shipyard_state_home)/windows/lease-close-test.lease" ]]; then
     exit 1
 fi
 printf 'ok - forge close forgets the lease record\n'
+if [[ ! -e "$(shipyard_state_home)/windows/zz-unrelated.lease" ]]; then
+    printf 'not ok - forge close preserves unrelated lease records\n' >&2
+    exit 1
+fi
+printf 'ok - forge close preserves unrelated lease records under errexit\n'
+rm -f "$(shipyard_state_home)/windows/zz-unrelated.lease"
 if [[ -e "$no_mistakes_aborted_file" ]]; then
     printf 'not ok - forge close does not abort a no-mistakes run that already reached an outcome\n' >&2
     exit 1

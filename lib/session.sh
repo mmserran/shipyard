@@ -149,6 +149,7 @@ shipyard_forget_lease() {
         IFS=$'\t' read -r recorded_window_id _ < "$lease_file"
         [[ "$recorded_window_id" == "$window_id" ]] && rm -f "$lease_file"
     done
+    return 0
 }
 
 shipyard_watcher_command() {
