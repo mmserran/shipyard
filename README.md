@@ -41,7 +41,7 @@ Shipyard:
    (75% of the height) for the main work and a bottom pane (25%) for a
    secondary tool, with focus on the top pane;
 5. symlinks the worktree's `node_modules` to the root checkout's, when the
-   root has a `package.json`;
+   root has a `package.json` and an existing `node_modules` directory;
 6. records enough lease identity for safe automatic cleanup;
 7. starts a state watcher; and
 8. opens an ordinary shell without starting an agent.
@@ -65,18 +65,19 @@ Treehouse's copy in place, so nothing gets copied and there's nothing to
 truncate.
 
 Because the symlink makes the worktree's `node_modules` the *same directory*
-as root's, `npm install`/`ci`/`add`/`update`/`remove`/`uninstall`/`dedupe`/
-`prune` are disabled inside a linked worktree — run from `bin/npm` on `PATH`,
-which detects a symlinked `node_modules` and blocks only those subcommands,
-passing everything else (`run`, `test`, `ls`, ...) through untouched. This
-holds regardless of which agent, tool, or human is driving the worktree's
-shell, since it isn't tied to any one agent's permission config.
+as root's, the `install` (`i`), `ci`, `add`, `update` (`up`), `remove` (`rm`),
+`uninstall` (`un`), `dedupe`, and `prune` npm subcommands are disabled inside
+a linked worktree. The `bin/npm` shim on `PATH` detects a symlinked
+`node_modules` and blocks only those subcommands, passing everything else
+(`run`, `test`, `ls`, ...) through untouched. This holds regardless of which
+agent, tool, or human is driving the worktree's shell, since it isn't tied to
+any one agent's permission config.
 
 ```bash
 forge new --new-deps nav-header   # skip linking; this worktree gets its own
                                    # independent, writable node_modules
 forge new-deps                    # mid-session: swap a linked worktree's
-                                   # node_modules for an independent copy
+                                   # node_modules for an empty writable directory
 forge no-new-deps                 # mid-session: swap back to the symlink
                                    # shared with the root checkout
 ```
