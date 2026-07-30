@@ -881,6 +881,8 @@ mkdir -p "$autofix_worktree/artifacts"
 printf 'fake-png' > "$autofix_worktree/artifacts/after.png"
 
 autofix_pr_body=""
+autofix_pr_body_after_view=""
+autofix_view_count_file="$test_tmp/autofix-view-count"
 autofix_edit_body=""
 autofix_edit_called=0
 # screenshot_autofix_pr_body calls screenshot_publish via command
@@ -894,7 +896,13 @@ screenshot_publish() {
 }
 gh() {
     if [[ "$1" == "pr" && "$2" == "view" ]]; then
-        printf '%s' "$autofix_pr_body"
+        autofix_view_count="$(($(<"$autofix_view_count_file") + 1))"
+        printf '%s' "$autofix_view_count" > "$autofix_view_count_file"
+        if [[ "$autofix_view_count" -gt 1 && -n "$autofix_pr_body_after_view" ]]; then
+            printf '%s' "$autofix_pr_body_after_view"
+        else
+            printf '%s' "$autofix_pr_body"
+        fi
         return 0
     fi
     if [[ "$1" == "pr" && "$2" == "edit" ]]; then
@@ -911,6 +919,7 @@ gh() {
     return 0
 }
 
+printf '0' > "$autofix_view_count_file"
 autofix_pr_body='![before](artifacts/before.png) ![after](artifacts/after.png) ![live](https://example.test/already.png)'
 screenshot_autofix_pr_body "$autofix_worktree" "42"
 assert_equal \
@@ -922,22 +931,50 @@ assert_equal "1" "$autofix_edit_called" \
 
 autofix_edit_called=0
 autofix_edit_body=""
+printf '0' > "$autofix_view_count_file"
 autofix_pr_body='![missing](artifacts/missing.png) ![live](https://example.test/already.png)'
 screenshot_autofix_pr_body "$autofix_worktree" "42"
 assert_equal "0" "$autofix_edit_called" \
     "autofix leaves the PR alone when no local link resolves to a file"
 
 : > "$autofix_publish_calls_file"
+printf '0' > "$autofix_view_count_file"
 autofix_pr_body='![a](artifacts/after.png) ![b](artifacts/after.png)'
 screenshot_autofix_pr_body "$autofix_worktree" "42"
 assert_equal "1" "$(wc -c < "$autofix_publish_calls_file")" \
     "autofix uploads a repeated local file only once"
 
 autofix_edit_body=""
+printf '0' > "$autofix_view_count_file"
 autofix_pr_body="![file-uri](file://$autofix_worktree/artifacts/after.png)"
 screenshot_autofix_pr_body "$autofix_worktree" "42"
 assert_equal "https://example.test/hosted/after.png" \
     "$(sed -E 's/.*\(([^)]+)\)/\1/' <<<"$autofix_edit_body")" \
     "autofix strips a file:// prefix before checking the filesystem"
+
+autofix_edit_called=0
+printf '0' > "$autofix_view_count_file"
+autofix_pr_body='[download](artifacts/after.png)'
+screenshot_autofix_pr_body "$autofix_worktree" "42"
+assert_equal "0" "$autofix_edit_called" \
+    "autofix ignores ordinary markdown links to image files"
+
+autofix_edit_called=0
+printf '0' > "$autofix_view_count_file"
+autofix_pr_body='![after](artifacts/after.png)'
+autofix_pr_body_after_view='A concurrently updated body'
+screenshot_autofix_pr_body "$autofix_worktree" "42"
+assert_equal "0" "$autofix_edit_called" \
+    "autofix preserves a PR body changed during publication"
+autofix_pr_body_after_view=""
+
+autofix_edit_called=0
+printf '0' > "$autofix_view_count_file"
+screenshot_publish() {
+    return 1
+}
+screenshot_autofix_pr_body "$autofix_worktree" "42"
+assert_equal "0" "$autofix_edit_called" \
+    "autofix leaves local links intact when publication fails"
 
 printf 'all tests passed\n'
