@@ -75,6 +75,12 @@ discard, so it doesn't prompt — but it does report what it's discarding.
 If returning the lease fails, the window stays open and its cleanup record is
 preserved.
 
+In a project's command window, `forge close` closes that window without lease
+cleanup. If another Shipyard project is open, the tmux client switches to its
+command window first; otherwise tmux falls back normally, detaching or exiting
+when no session remains. Unleased windows not marked as command windows are
+still rejected.
+
 ## Open a project's command window
 
 ```bash
@@ -183,7 +189,7 @@ because it does not repair PR comments or non-image local links.
 ```text
 forge open [path]
 forge new <intent>
-forge close  # force-close the current window, discarding uncommitted changes
+forge close  # close the current intent or command window
 forge build  # manually override the state to building
 forge alert
 forge status
