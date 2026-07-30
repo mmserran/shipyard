@@ -418,6 +418,13 @@ shipyard_reap() {
         printf '%s\n' "$return_output" >&2
         if [[ "$return_status" -eq 0 && "$return_output" != *Aborted* ]]; then
             rm -f "$lease_file"
+        elif [[ "$return_output" == *"is not leased"* ]]; then
+            # Treehouse already released this lease by some other path (e.g.
+            # a manual `treehouse return --force`), so the precondition
+            # fails even though there's nothing left to protect. Treat it
+            # the same as success rather than leaving an orphaned record
+            # that every future reconcile fails to clear.
+            rm -f "$lease_file"
         else
             result=1
         fi
