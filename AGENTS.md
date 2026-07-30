@@ -15,7 +15,7 @@ git switch -c feat/new-feature origin/development
 ```
 Always branch from latest `origin/development` (never `main`, detached HEAD, or another feature branch — worktrees start detached and local `development` may be checked out elsewhere). Implement and verify the requested change. If blocked waiting on the user, call `forge alert` first.
 
-**3. Publish screenshots before the PR.** Before running no-mistakes, if PR text will mention local visual artifacts, use the **publish-screenshots** skill: `forge publish-screenshot artifacts/browser/after.png`. Use the returned hosted URL only — never `file://`, localhost, or workspace-relative links. After PR creation, check body/comments for any local links that slipped through.
+**3. Publish screenshots before the PR.** Before running no-mistakes, if PR text will mention local visual artifacts, use the **publish-screenshots** skill: `forge publish-screenshot artifacts/browser/after.png`. Use the returned hosted URL only — never `file://`, localhost, or workspace-relative links. After PR creation, check body/comments for any local links that slipped through. (The window watcher also auto-fixes local image links left in the PR body once it sees a PR, as a backstop — don't rely on it in place of publishing up front, since PR comments and non-image local links are out of its scope.)
 
 **4. Ship via no-mistakes.**
 ```bash

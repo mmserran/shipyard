@@ -69,3 +69,54 @@ screenshot_publish() {
         printf '![%s](%s)\n' "$label" "$url"
     done
 }
+
+# Self-heals a PR body that still points at local screenshot files: GitHub
+# can't render `file://`, absolute, or workspace-relative image links, and
+# agents don't reliably remember to publish evidence before handing off to
+# no-mistakes. Uploads each local image it can find on disk and rewrites the
+# body in place. Idempotent -- once a link is hosted it no longer matches, so
+# calling this every watcher poll is safe.
+screenshot_autofix_pr_body() {
+    local worktree="$1"
+    local pr="$2"
+    local body new_body target resolved line url changed
+    local -A uploaded=()
+
+    body="$(gh pr view "$pr" --json body --jq .body 2>/dev/null)" || return 0
+    [[ -n "$body" ]] || return 0
+
+    new_body="$body"
+    changed=0
+
+    local targets
+    targets="$(grep -oE '\]\([^) ]+\)' <<<"$body" | sed -E 's/^\]\(//; s/\)$//' | sort -u)"
+
+    while IFS= read -r target; do
+        [[ -n "$target" ]] || continue
+        case "$target" in
+            http://*|https://*) continue ;;
+        esac
+        case "${target,,}" in
+            *.png|*.jpg|*.jpeg|*.gif|*.webp|*.bmp|*.svg) ;;
+            *) continue ;;
+        esac
+
+        resolved="${target#file://}"
+        [[ "$resolved" == /* ]] || resolved="$worktree/$resolved"
+        [[ -f "$resolved" ]] || continue
+
+        if [[ -z "${uploaded[$target]:-}" ]]; then
+            line="$(cd "$worktree" && screenshot_publish "$resolved" 2>/dev/null)" || continue
+            url="${line#*(}"
+            url="${url%)*}"
+            [[ -n "$url" ]] || continue
+            uploaded[$target]="$url"
+        fi
+
+        new_body="${new_body//"$target"/${uploaded[$target]}}"
+        changed=1
+    done <<<"$targets"
+
+    [[ "$changed" -eq 1 && "$new_body" != "$body" ]] || return 0
+    gh pr edit "$pr" --body "$new_body" >/dev/null 2>&1
+}

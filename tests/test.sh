@@ -26,6 +26,8 @@ source "$repo_root/lib/pipeline.sh"
 source "$repo_root/lib/session.sh"
 # shellcheck source=../lib/watcher.sh
 source "$repo_root/lib/watcher.sh"
+# shellcheck source=../lib/screenshot.sh
+source "$repo_root/lib/screenshot.sh"
 # shellcheck source=../shell/bash.sh
 source "$repo_root/shell/bash.sh"
 # shell/bash.sh shadows the exit builtin with a function; this script relies
@@ -792,10 +794,20 @@ gh() {
 sleep() {
     :
 }
+autofix_calls_file="$test_tmp/autofix-calls"
+rm -f "$autofix_calls_file"
+screenshot_autofix_pr_body() {
+    printf '%s %s\n' "$1" "$2" >> "$autofix_calls_file"
+}
 watcher_run "$intent_window" "$repo_root"
 assert_equal "merged" \
     "$(tmux show-options -wqv -t "$intent_window" @pipeline_state)" \
     "watcher observes a merged GitHub PR"
+if [[ -e "$autofix_calls_file" ]]; then
+    printf 'not ok - watcher skips screenshot autofix for a merged PR\n' >&2
+    exit 1
+fi
+printf 'ok - watcher skips screenshot autofix for a merged PR\n'
 
 watch_iterations=0
 watcher_no_mistakes_status() {
@@ -822,5 +834,110 @@ case "$split_window_launch" in
         exit 1
         ;;
 esac
+
+watch_iterations=0
+watcher_no_mistakes_status() {
+    printf '  branch: "feat/intent-workflow"\n'
+    printf '  status: "complete"\n'
+    printf '  pr: "https://example.test/pull/3"\n'
+}
+gh() {
+    printf 'OPEN\n'
+}
+rm -f "$autofix_calls_file"
+rmdir "$(shipyard_state_home)/watch-${intent_window}.lock" 2>/dev/null || true
+watcher_run "$intent_window" "$repo_root"
+assert_equal "published" \
+    "$(tmux show-options -wqv -t "$intent_window" @pipeline_state)" \
+    "watcher marks an open PR as published"
+assert_equal "$repo_root https://example.test/pull/3" \
+    "$(<"$autofix_calls_file")" \
+    "watcher runs screenshot autofix against the worktree and PR for an open PR"
+
+watch_iterations=0
+gh() {
+    printf 'CLOSED\n'
+}
+rm -f "$autofix_calls_file"
+rmdir "$(shipyard_state_home)/watch-${intent_window}.lock" 2>/dev/null || true
+watcher_run "$intent_window" "$repo_root"
+assert_equal "attention" \
+    "$(tmux show-options -wqv -t "$intent_window" @pipeline_state)" \
+    "watcher flags a closed PR for attention"
+if [[ -e "$autofix_calls_file" ]]; then
+    printf 'not ok - watcher skips screenshot autofix for a closed PR\n' >&2
+    exit 1
+fi
+printf 'ok - watcher skips screenshot autofix for a closed PR\n'
+
+# Redefining screenshot_autofix_pr_body as a stub above overwrote the real
+# function sourced at the top of this script (bash functions don't stack);
+# re-source it now that the watcher-integration tests are done stubbing it out.
+# shellcheck source=../lib/screenshot.sh
+source "$repo_root/lib/screenshot.sh"
+
+autofix_worktree="$test_tmp/autofix-worktree"
+mkdir -p "$autofix_worktree/artifacts"
+printf 'fake-png' > "$autofix_worktree/artifacts/after.png"
+
+autofix_pr_body=""
+autofix_edit_body=""
+autofix_edit_called=0
+# screenshot_autofix_pr_body calls screenshot_publish via command
+# substitution, which forks a subshell -- a shell-variable counter mutated
+# there wouldn't survive back to this scope, so count upload calls on disk.
+autofix_publish_calls_file="$test_tmp/autofix-publish-calls"
+: > "$autofix_publish_calls_file"
+screenshot_publish() {
+    printf '.' >> "$autofix_publish_calls_file"
+    printf '![%s](https://example.test/hosted/%s)\n' "$(basename "$1")" "$(basename "$1")"
+}
+gh() {
+    if [[ "$1" == "pr" && "$2" == "view" ]]; then
+        printf '%s' "$autofix_pr_body"
+        return 0
+    fi
+    if [[ "$1" == "pr" && "$2" == "edit" ]]; then
+        autofix_edit_called=$((autofix_edit_called + 1))
+        shift 3
+        while [[ $# -gt 0 ]]; do
+            if [[ "$1" == "--body" ]]; then
+                autofix_edit_body="$2"
+            fi
+            shift
+        done
+        return 0
+    fi
+    return 0
+}
+
+autofix_pr_body='![before](artifacts/before.png) ![after](artifacts/after.png) ![live](https://example.test/already.png)'
+screenshot_autofix_pr_body "$autofix_worktree" "42"
+assert_equal \
+    '![before](artifacts/before.png) ![after](https://example.test/hosted/after.png) ![live](https://example.test/already.png)' \
+    "$autofix_edit_body" \
+    "autofix rewrites only local links that resolve to a real file"
+assert_equal "1" "$autofix_edit_called" \
+    "autofix edits the PR body once a local link is found"
+
+autofix_edit_called=0
+autofix_edit_body=""
+autofix_pr_body='![missing](artifacts/missing.png) ![live](https://example.test/already.png)'
+screenshot_autofix_pr_body "$autofix_worktree" "42"
+assert_equal "0" "$autofix_edit_called" \
+    "autofix leaves the PR alone when no local link resolves to a file"
+
+: > "$autofix_publish_calls_file"
+autofix_pr_body='![a](artifacts/after.png) ![b](artifacts/after.png)'
+screenshot_autofix_pr_body "$autofix_worktree" "42"
+assert_equal "1" "$(wc -c < "$autofix_publish_calls_file")" \
+    "autofix uploads a repeated local file only once"
+
+autofix_edit_body=""
+autofix_pr_body="![file-uri](file://$autofix_worktree/artifacts/after.png)"
+screenshot_autofix_pr_body "$autofix_worktree" "42"
+assert_equal "https://example.test/hosted/after.png" \
+    "$(sed -E 's/.*\(([^)]+)\)/\1/' <<<"$autofix_edit_body")" \
+    "autofix strips a file:// prefix before checking the filesystem"
 
 printf 'all tests passed\n'

@@ -171,6 +171,11 @@ forge publish-screenshot artifacts/browser/before.png artifacts/browser/after.pn
 The command prints hosted Markdown image links. It does not add the image to Git
 history.
 
+As a safety net, the window watcher also self-heals a PR body once it appears:
+any `file://`, absolute, or workspace-relative image link it can resolve on
+disk gets published and swapped for its hosted URL automatically, so a missed
+manual publish before a no-mistakes run doesn't leave dead links in the PR.
+
 ## Commands
 
 ```text
@@ -197,7 +202,8 @@ automatic state management.
 - `lib/pipeline.sh` maps effective states to tmux badges.
 - `lib/watcher.sh` derives validation and PR states, and flags a worktree's
   uncommitted-changes status for the status bar.
-- `lib/screenshot.sh` publishes PR-safe visual evidence.
+- `lib/screenshot.sh` publishes PR-safe visual evidence and self-heals local
+  screenshot links left in a PR body.
 - `skills/publish-screenshots/SKILL.md` teaches agents when local visual
   evidence must be published.
 - `tmux.conf` renders state and defines navigation and cleanup hooks.

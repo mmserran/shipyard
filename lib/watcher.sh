@@ -153,6 +153,9 @@ watcher_run() {
             elif [[ "$pr_state" == "CLOSED" ]]; then
                 watcher_apply_state "$window_id" attention "$pr"
             else
+                if command -v gh >/dev/null 2>&1; then
+                    screenshot_autofix_pr_body "$worktree" "$pr"
+                fi
                 watcher_apply_state "$window_id" published "$pr"
             fi
         elif [[ "$run_status" == "running" ]]; then
