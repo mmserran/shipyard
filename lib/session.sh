@@ -413,10 +413,20 @@ shipyard_reap() {
         # trusting the exit code alone would delete this lease's only
         # record while Treehouse still holds it, orphaning the slot beyond
         # anything shipyard_reconcile can ever retry. Check the output too.
-        return_output="$(treehouse return "$path" --if-lease-id "$lease_id" < /dev/null 2>&1)"
-        return_status=$?
+        if return_output="$(treehouse return "$path" --if-lease-id "$lease_id" < /dev/null 2>&1)"; then
+            return_status=0
+        else
+            return_status=$?
+        fi
         printf '%s\n' "$return_output" >&2
         if [[ "$return_status" -eq 0 && "$return_output" != *Aborted* ]]; then
+            rm -f "$lease_file"
+        elif [[ "$return_output" == *"is not leased"* ]]; then
+            # Treehouse already released this lease by some other path (e.g.
+            # a manual `treehouse return --force`), so the precondition
+            # fails even though there's nothing left to protect. Treat it
+            # the same as success rather than leaving an orphaned record
+            # that every future reconcile fails to clear.
             rm -f "$lease_file"
         else
             result=1

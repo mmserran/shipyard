@@ -378,6 +378,29 @@ else
     exit 1
 fi
 rm -f "$(shipyard_state_home)/windows/lease-aborted.lease"
+
+# If the lease was already returned by some other path (e.g. a manual
+# `treehouse return --force` run to work around a dirty worktree), a later
+# `treehouse return --if-lease-id` fails its precondition with a nonzero
+# exit and "is not leased" -- reap must treat that as done rather than
+# leaving an orphaned record no future reconcile can ever clear.
+treehouse() {
+    case "$1" in
+        return)
+            printf 'failed to return worktree: lease precondition failed: worktree %s is not leased\n' "$2" >&2
+            return 1
+            ;;
+    esac
+}
+shipyard_record_lease "@already-returned-test" "/tmp/already-returned-worktree" "lease-already-returned" "holder"
+shipyard_reap "@already-returned-test"
+printf 'ok - reap reports success when treehouse says the lease is already returned\n'
+if [[ -e "$(shipyard_state_home)/windows/lease-already-returned.lease" ]]; then
+    printf 'not ok - reap clears the lease record once treehouse confirms it is already returned\n' >&2
+    exit 1
+else
+    printf 'ok - reap clears the lease record once treehouse confirms it is already returned\n'
+fi
 treehouse() {
     case "$1" in
         get)
