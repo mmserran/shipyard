@@ -81,10 +81,10 @@ tmux set-option -t testrepo @shipyard_project_root "$repo_root"
 window_id="$(tmux display-message -p '#{window_id}')"
 pane_id="$(tmux display-message -p '#{pane_id}')"
 
-assert_equal " 💡 " "$(pipeline_badge_for planning)" "planning uses lightbulb"
-assert_equal " ● " "$(pipeline_badge_for building)" "building uses dot"
-assert_equal " 🔍 " "$(pipeline_badge_for validating)" "validating uses magnifying glass"
-assert_equal " 🚢 " "$(pipeline_badge_for merged)" "merged uses cargo ship"
+assert_equal " 💡" "$(pipeline_badge_for planning)" "planning uses lightbulb"
+assert_equal " ●" "$(pipeline_badge_for building)" "building uses dot"
+assert_equal " 🔍" "$(pipeline_badge_for validating)" "validating uses magnifying glass"
+assert_equal " 🚢" "$(pipeline_badge_for merged)" "merged uses cargo ship"
 
 pipeline_set building >/dev/null
 assert_equal "building" \
@@ -727,7 +727,7 @@ intent_window="$(tmux list-windows -a -F '#{window_name} #{window_id}' |
 assert_equal "intent workflow" \
     "$(tmux display-message -p -t "$intent_window" '#{window_name}')" \
     "forge new preserves the intent as the window title"
-assert_equal " 💡 " \
+assert_equal " 💡" \
     "$(tmux show-options -wqv -t "$intent_window" @pipeline_badge)" \
     "forge new starts in planning"
 assert_equal "bash" \

@@ -10,15 +10,15 @@ pipeline_require_tmux() {
 pipeline_badge_for() {
     case "$1" in
         planning)
-            printf ' 💡 '
+            printf ' 💡'
             ;;
 
         building)
-            printf ' ● '
+            printf ' ●'
             ;;
 
         validating)
-            printf ' 🔍 '
+            printf ' 🔍'
             ;;
 
         attention)
@@ -30,7 +30,7 @@ pipeline_badge_for() {
             ;;
 
         merged)
-            printf ' 🚢 '
+            printf ' 🚢'
             ;;
 
         *)
