@@ -42,17 +42,14 @@ screenshot_publish() {
         fi
     fi
 
-    local branch stamp tmpdir run_id repo
+    local branch tmpdir repo
     branch="$(git rev-parse --abbrev-ref HEAD)"
-    stamp="$(date +%Y%m%d-%H%M%S)"
     tmpdir="$(mktemp -d)"
     trap 'rm -rf "$tmpdir"; trap - RETURN' RETURN
-    run_id="${tmpdir##*/}"
-    run_id="${run_id//[^A-Za-z0-9._-]/-}"
     repo="$(gh repo view --json nameWithOwner --jq '.nameWithOwner')"
 
     local index=0
-    local base label asset_name url
+    local base label asset_name digest url
     for file in "$@"; do
         index=$((index + 1))
         base="$(basename "$file")"
@@ -61,11 +58,75 @@ screenshot_publish() {
         label="${label//]/\\]}"
         label="${label//$'\r'/'&#13;'}"
         label="${label//$'\n'/'&#10;'}"
-        asset_name="${branch//\//-}-${stamp}-${run_id}-${index}-${base}"
+        digest="$(git hash-object "$file")" || return
+        asset_name="${branch//\//-}-${digest}-${base}"
         asset_name="${asset_name//[^A-Za-z0-9._-]/-}"
-        ln -s "$(realpath "$file")" "$tmpdir/$asset_name"
-        gh release upload "$SCREENSHOT_RELEASE_TAG" "$tmpdir/$asset_name" >&2
+        if ! gh release view "$SCREENSHOT_RELEASE_TAG" --json assets --jq '.assets[].name' 2>/dev/null |
+            grep -Fxq "$asset_name"; then
+            ln -s "$(realpath "$file")" "$tmpdir/$asset_name"
+            if ! gh release upload "$SCREENSHOT_RELEASE_TAG" "$tmpdir/$asset_name" >&2; then
+                gh release view "$SCREENSHOT_RELEASE_TAG" --json assets --jq '.assets[].name' 2>/dev/null |
+                    grep -Fxq "$asset_name" || return 1
+            fi
+        fi
         url="https://github.com/${repo}/releases/download/${SCREENSHOT_RELEASE_TAG}/${asset_name}"
         printf '![%s](%s)\n' "$label" "$url"
     done
+}
+
+# Self-heals a PR body that still points at local screenshot files: GitHub
+# can't render `file://`, absolute, or workspace-relative image links, and
+# agents don't reliably remember to publish evidence before handing off to
+# no-mistakes. Uploads each local image it can find on disk and rewrites the
+# body in place. Idempotent -- once a link is hosted it no longer matches, so
+# calling this every watcher poll is safe.
+screenshot_autofix_pr_body() {
+    local worktree="$1"
+    local pr="$2"
+    local body current_body new_body image target resolved line url changed prefix suffix
+    local -A uploaded=()
+
+    body="$(gh pr view "$pr" --json body --jq .body 2>/dev/null)" || return 0
+    [[ -n "$body" ]] || return 0
+
+    new_body="$body"
+    changed=0
+
+    local targets
+    targets="$(grep -oE '!\[[^]]*\]\([^) ]+\)' <<<"$body" | sort -u)"
+
+    while IFS= read -r image; do
+        [[ -n "$image" ]] || continue
+        target="${image##*\](}"
+        target="${target%)}"
+        case "$target" in
+            http://*|https://*) continue ;;
+        esac
+        case "${target,,}" in
+            *.png|*.jpg|*.jpeg|*.gif|*.webp|*.bmp|*.svg) ;;
+            *) continue ;;
+        esac
+
+        resolved="${target#file://}"
+        [[ "$resolved" == /* ]] || resolved="$worktree/$resolved"
+        [[ -f "$resolved" ]] || continue
+
+        if [[ -z "${uploaded[$target]:-}" ]]; then
+            line="$(cd "$worktree" && screenshot_publish "$resolved" 2>/dev/null)" || continue
+            url="${line#*(}"
+            url="${url%)*}"
+            [[ -n "$url" ]] || continue
+            uploaded[$target]="$url"
+        fi
+
+        suffix="$target)"
+        prefix="${image%"$suffix"}"
+        new_body="${new_body//"$image"/"$prefix${uploaded[$target]})"}"
+        changed=1
+    done <<<"$targets"
+
+    [[ "$changed" -eq 1 && "$new_body" != "$body" ]] || return 0
+    current_body="$(gh pr view "$pr" --json body --jq .body 2>/dev/null)" || return 0
+    [[ "$current_body" == "$body" ]] || return 0
+    gh pr edit "$pr" --body "$new_body" >/dev/null 2>&1
 }
