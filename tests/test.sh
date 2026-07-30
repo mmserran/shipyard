@@ -83,7 +83,7 @@ pane_id="$(tmux display-message -p '#{pane_id}')"
 
 assert_equal " 💡" "$(pipeline_badge_for planning)" "planning uses lightbulb"
 assert_equal " ●" "$(pipeline_badge_for building)" "building uses dot"
-assert_equal " 🔍" "$(pipeline_badge_for validating)" "validating uses magnifying glass"
+assert_equal " 📝" "$(pipeline_badge_for validating)" "validating uses memo"
 assert_equal " 🚢" "$(pipeline_badge_for merged)" "merged uses cargo ship"
 
 pipeline_set building >/dev/null

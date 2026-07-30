@@ -18,7 +18,7 @@ pipeline_badge_for() {
             ;;
 
         validating)
-            printf ' 🔍'
+            printf ' 📝'
             ;;
 
         attention)
