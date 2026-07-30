@@ -296,12 +296,16 @@ shipyard_new() {
 # for this branch first, so its daemon isn't left tracking a worktree
 # Treehouse is about to reset and potentially hand to a different unit of
 # work out from under it.
+#
+# On a command window there is no lease to return, so it just closes the
+# window and hands the client to another open shipyard repo instead.
 shipyard_close() {
     local window_id
     local worktree
     local lease_id
     local status_output
     local run_output
+    local role
 
     window_id="$(tmux display-message -p -t "${TMUX_PANE:-}" '#{window_id}' 2>/dev/null)"
     if [[ -z "$window_id" ]]; then
@@ -312,6 +316,11 @@ shipyard_close() {
     worktree="$(tmux show-options -wqv -t "$window_id" @shipyard_worktree 2>/dev/null)"
     lease_id="$(tmux show-options -wqv -t "$window_id" @shipyard_lease_id 2>/dev/null)"
     if [[ -z "$worktree" || -z "$lease_id" ]]; then
+        role="$(tmux show-options -wqv -t "$window_id" @shipyard_role 2>/dev/null)"
+        if [[ "$role" == command ]]; then
+            shipyard_close_command_window "$window_id"
+            return
+        fi
         printf 'forge: not a leased intent window\n' >&2
         return 1
     fi
@@ -338,6 +347,44 @@ shipyard_close() {
     fi
 
     shipyard_forget_lease "$window_id"
+    tmux kill-window -t "$window_id"
+}
+
+# Finds another open repo's command window, so shipyard_close_command_window
+# can hand the client straight to it instead of leaving tmux to fall back to
+# whatever window it last happened to be viewing.
+shipyard_next_repo_window() {
+    local exclude_session="$1"
+    local session_name
+    local candidate
+
+    while IFS= read -r session_name; do
+        [[ -n "$session_name" && "$session_name" != "$exclude_session" ]] || continue
+        [[ -n "$(tmux show-options -qv -t "$session_name" @shipyard_project_root 2>/dev/null)" ]] || continue
+        candidate="$(shipyard_command_window "$session_name")"
+        [[ -n "$candidate" ]] || continue
+        printf '%s\n' "$candidate"
+        return
+    done < <(tmux list-sessions -F '#{session_name}' 2>/dev/null)
+}
+
+# Closes a repo's command window. There's no lease to return here, so unlike
+# shipyard_close's intent-window path this never fails the close: it just
+# moves the client to another open shipyard repo's command window, if any,
+# before closing -- and otherwise leaves tmux to do what it always does when
+# a session's last window goes away.
+shipyard_close_command_window() {
+    local window_id="$1"
+    local session_name
+    local next_window
+
+    session_name="$(tmux display-message -p -t "$window_id" '#{session_name}' 2>/dev/null)"
+    next_window="$(shipyard_next_repo_window "$session_name")"
+
+    if [[ -n "$next_window" && -n "${TMUX:-}" ]]; then
+        tmux switch-client -t "$next_window"
+    fi
+
     tmux kill-window -t "$window_id"
 }
 

@@ -31,7 +31,9 @@ Usage:
   forge new <intent>  Create an intent window in a leased Treehouse worktree
   forge close         Force-close this window: abort any active no-mistakes
                        run for it, discard uncommitted changes, and return
-                       the Treehouse lease
+                       the Treehouse lease. On a repo's command window,
+                       instead just closes the window and switches to
+                       another open shipyard repo's command window, if any
 
   forge publish-screenshot <file> [<file> ...]
                        Upload screenshot(s) to a rolling GitHub Release and

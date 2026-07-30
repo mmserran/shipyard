@@ -42,6 +42,7 @@ tmux() {
         return 0
     fi
     if [[ "$1" == "switch-client" ]]; then
+        switch_client_target="${3:-}"
         return 0
     fi
     if [[ "${fail_new_window:-0}" -eq 1 && "$1" == "new-window" ]]; then
@@ -75,6 +76,62 @@ assert_equal() {
     fi
     printf 'ok - %s\n' "$label"
 }
+
+# These run before any other shipyard session exists, so the "no other repo
+# open" case can be tested for real instead of having to fake an empty
+# tmux list-sessions.
+switch_client_target=""
+tmux new-session -d -s close-cmd-solo -n command -c "$test_tmp"
+tmux set-option -t close-cmd-solo @shipyard_project_root "$test_tmp/close-cmd-solo"
+solo_command_window="$(tmux display-message -p -t close-cmd-solo '#{window_id}')"
+solo_command_pane="$(tmux display-message -p -t close-cmd-solo '#{pane_id}')"
+tmux set-option -w -t "$solo_command_window" @shipyard_role command
+
+TMUX_PANE="$solo_command_pane" shipyard_close
+assert_equal "" "$switch_client_target" \
+    "closing a command window with no other shipyard repo open does not switch clients"
+if tmux has-session -t "=close-cmd-solo" 2>/dev/null; then
+    printf 'not ok - closing the only command window closes its session\n' >&2
+    exit 1
+fi
+printf 'ok - closing the only command window closes its session\n'
+
+tmux new-session -d -s close-cmd-other -n command -c "$test_tmp"
+tmux set-option -t close-cmd-other @shipyard_project_root "$test_tmp/close-cmd-other"
+other_command_window="$(tmux display-message -p -t close-cmd-other '#{window_id}')"
+tmux set-option -w -t "$other_command_window" @shipyard_role command
+
+tmux new-session -d -s close-cmd-mine -n command -c "$test_tmp"
+tmux set-option -t close-cmd-mine @shipyard_project_root "$test_tmp/close-cmd-mine"
+mine_command_window="$(tmux display-message -p -t close-cmd-mine '#{window_id}')"
+mine_command_pane="$(tmux display-message -p -t close-cmd-mine '#{pane_id}')"
+tmux set-option -w -t "$mine_command_window" @shipyard_role command
+
+switch_client_target=""
+TMUX_PANE="$mine_command_pane" shipyard_close
+assert_equal "$other_command_window" "$switch_client_target" \
+    "closing a command window with another shipyard repo open switches to its command window"
+if tmux has-session -t "=close-cmd-mine" 2>/dev/null; then
+    printf 'not ok - closing a command window closes its own session\n' >&2
+    exit 1
+fi
+printf 'ok - closing a command window closes its own session\n'
+if ! tmux has-session -t "=close-cmd-other" 2>/dev/null; then
+    printf 'not ok - closing a command window leaves the other shipyard repo open\n' >&2
+    exit 1
+fi
+printf 'ok - closing a command window leaves the other shipyard repo open\n'
+tmux kill-session -t close-cmd-other 2>/dev/null || true
+
+tmux new-session -d -s close-cmd-norole -n intent -c "$test_tmp"
+norole_window="$(tmux display-message -p -t close-cmd-norole '#{window_id}')"
+norole_pane="$(tmux display-message -p -t close-cmd-norole '#{pane_id}')"
+if TMUX_PANE="$norole_pane" shipyard_close 2>/dev/null; then
+    printf 'not ok - forge close still refuses an unleased, non-command window\n' >&2
+    exit 1
+fi
+printf 'ok - forge close still refuses an unleased, non-command window\n'
+tmux kill-session -t close-cmd-norole 2>/dev/null || true
 
 tmux new-session -d -s testrepo -n intent -c "$repo_root"
 tmux set-option -t testrepo @shipyard_project_root "$repo_root"
