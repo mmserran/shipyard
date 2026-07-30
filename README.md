@@ -109,7 +109,7 @@ forge open portfolio/mserrano.net-web-services
 | --- | --- | --- |
 | `💡` | Planning; awaiting explicit approval | `forge new` |
 | `●` | Building | Automatic |
-| `🔍` | no-mistakes is running without a PR | Automatic |
+| `📝` | no-mistakes is running without a PR | Automatic |
 | yellow `📬` | PR published | Automatic |
 | red `🔔` | Agent blocked or validation failed | `forge alert` or automatic |
 | `🚢` | PR merged | Automatic |

@@ -93,7 +93,7 @@ screenshot_autofix_pr_body() {
     changed=0
 
     local targets
-    targets="$(grep -oE '!\[[^]]*\]\([^) ]+\)' <<<"$body" | sort -u)"
+    targets="$(grep -oE '!\[[^]]*\]\([^) ]+\)' <<<"$body" | sort -u || true)"
 
     while IFS= read -r image; do
         [[ -n "$image" ]] || continue
