@@ -1090,6 +1090,83 @@ case "$split_window_launch" in
         ;;
 esac
 
+# A running validation can coexist with a stale manual @pipeline_manual_state
+# attention flag, an already-published PR, or both -- the attach pane must
+# stay reachable in every case, even though the badge shown differs.
+tmux set-option -w -t "$intent_window" @pipeline_manual_state attention
+watch_iterations=0
+watcher_no_mistakes_status() {
+    printf '  branch: "feat/intent-workflow"\n'
+    printf '  status: "running"\n'
+}
+: > "$test_tmp/split-window"
+rmdir "$(shipyard_state_home)/watch-${intent_window}.lock" 2>/dev/null || true
+watcher_run "$intent_window" "$repo_root"
+assert_equal "attention" \
+    "$(tmux show-options -wqv -t "$intent_window" @pipeline_state)" \
+    "manual attention still wins the badge over an active run"
+split_window_launch="$(<"$test_tmp/split-window")"
+case "$split_window_launch" in
+    *"-h"*"no-mistakes attach")
+        printf 'ok - watcher opens the attach pane for an active run under lingering manual attention\n'
+        ;;
+    *)
+        printf 'not ok - watcher opens the attach pane for an active run under lingering manual attention\n%s\n' \
+            "$split_window_launch" >&2
+        exit 1
+        ;;
+esac
+tmux set-option -wu -t "$intent_window" @pipeline_manual_state
+
+watch_iterations=0
+watcher_no_mistakes_status() {
+    printf '  branch: "feat/intent-workflow"\n'
+    printf '  status: "running"\n'
+    printf '  pr: "https://example.test/pull/2"\n'
+}
+gh() {
+    printf 'OPEN\n'
+}
+: > "$test_tmp/split-window"
+rm -f "$autofix_calls_file"
+rmdir "$(shipyard_state_home)/watch-${intent_window}.lock" 2>/dev/null || true
+watcher_run "$intent_window" "$repo_root"
+assert_equal "published" \
+    "$(tmux show-options -wqv -t "$intent_window" @pipeline_state)" \
+    "an open PR still wins the badge over an active run"
+split_window_launch="$(<"$test_tmp/split-window")"
+case "$split_window_launch" in
+    *"-h"*"no-mistakes attach")
+        printf 'ok - watcher opens the attach pane for an active run with an already-created PR\n'
+        ;;
+    *)
+        printf 'not ok - watcher opens the attach pane for an active run with an already-created PR\n%s\n' \
+            "$split_window_launch" >&2
+        exit 1
+        ;;
+esac
+
+tmux set-option -w -t "$intent_window" @pipeline_manual_state attention
+watch_iterations=0
+: > "$test_tmp/split-window"
+rmdir "$(shipyard_state_home)/watch-${intent_window}.lock" 2>/dev/null || true
+watcher_run "$intent_window" "$repo_root"
+assert_equal "attention" \
+    "$(tmux show-options -wqv -t "$intent_window" @pipeline_state)" \
+    "manual attention wins the badge over an active run with a PR"
+split_window_launch="$(<"$test_tmp/split-window")"
+case "$split_window_launch" in
+    *"-h"*"no-mistakes attach")
+        printf 'ok - watcher opens the attach pane for an active run under both lingering manual attention and an already-created PR\n'
+        ;;
+    *)
+        printf 'not ok - watcher opens the attach pane for an active run under both lingering manual attention and an already-created PR\n%s\n' \
+            "$split_window_launch" >&2
+        exit 1
+        ;;
+esac
+tmux set-option -wu -t "$intent_window" @pipeline_manual_state
+
 watch_iterations=0
 watcher_no_mistakes_status() {
     printf '  branch: "feat/intent-workflow"\n'
