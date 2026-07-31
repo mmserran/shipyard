@@ -41,7 +41,7 @@ Shipyard (not the agent) owns worktree allocation, tmux windows, and state track
 
 No-mistakes validation/push/PR-creation are pre-authorized; merging is not.
 
-# Git Commit Trailers
+## Git Commit Trailers
 
 Add authorship with `git commit --trailer "Co-Authored-By: [ToolName] [Model] <[identifier]>"`.
 
