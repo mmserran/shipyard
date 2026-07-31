@@ -41,9 +41,11 @@ Shipyard:
 4. creates an intent window rooted in that worktree, split into a top pane
    (75% of the height) for the main work and a bottom pane (25%) for a
    secondary tool, with focus on the top pane;
-5. records enough lease identity for safe automatic cleanup;
-6. starts a state watcher; and
-7. opens an ordinary shell without starting an agent.
+5. ensures the leftmost repo-named Yazi window exists so the status bar keeps
+   a clickable repository label even before `forge open`;
+6. records enough lease identity for safe automatic cleanup;
+7. starts a state watcher; and
+8. opens an ordinary shell without starting an agent.
 
 If the remote's default branch cannot be resolved or fetched, `forge new`
 warns and continues from the worktree's existing checkout.
@@ -99,7 +101,8 @@ rather than on a specific intent. Neither window is leased from Treehouse or
 tied to a unit of work.
 
 Repeated calls reuse both windows instead of creating duplicates. If the Yazi
-window was manually killed through tmux, the next `forge open` recreates it.
+window was manually killed through tmux, the next `forge open` (or `forge new`)
+recreates it at the left of the window list.
 
 If the session doesn't exist yet, `forge open` creates it, so it also works
 as a way to open a new tmux session for a repository you haven't started

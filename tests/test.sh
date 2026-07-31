@@ -876,6 +876,9 @@ if [[ -z "$replacement_repo_window" || "$replacement_repo_window" == "$repo_wind
     exit 1
 fi
 printf 'ok - forge open recreates a manually closed Yazi repo window\n'
+assert_equal "$replacement_repo_window" \
+    "$(tmux list-windows -t "=$open_session" -F '#{window_id}' | head -n 1)" \
+    "forge open recreates the Yazi repo window at the leftmost index"
 
 TMUX="test" shipyard_new "intent workflow"
 intent_window="$(tmux list-windows -a -F '#{window_name} #{window_id}' |
@@ -920,6 +923,13 @@ intent_session="$(tmux display-message -p -t "$intent_window" '#{session_name}')
 assert_equal "$(shipyard_project_root "$repo_root")" \
     "$(tmux show-options -qv -t "$intent_session" @shipyard_project_root)" \
     "session records its canonical repository"
+intent_repo_window="$(shipyard_repo_window "$intent_session")"
+assert_equal "repo" \
+    "$(tmux show-options -wqv -t "$intent_repo_window" @shipyard_role)" \
+    "forge new ensures the Yazi repo window exists"
+assert_equal "$intent_repo_window" \
+    "$(tmux list-windows -t "=$intent_session" -F '#{window_id}' | head -n 1)" \
+    "forge new keeps the Yazi repo window leftmost"
 case "$watcher_launch" in
     *" watch "*)
         printf 'ok - watcher launch is shell quoted\n'

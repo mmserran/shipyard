@@ -81,6 +81,32 @@ shipyard_repo_window() {
         awk '$2 == "repo" {print $1; exit}'
 }
 
+# Creates the decorative repo-named Yazi window if missing and keeps it
+# leftmost so it replaces the old status-left project label. Callers must
+# already have verified that yazi is on PATH and that the session exists.
+shipyard_ensure_repo_window() {
+    local session_name="$1"
+    local project_root="$2"
+    local repo_window_id
+    local first_window_id
+
+    repo_window_id="$(shipyard_repo_window "$session_name")"
+    if [[ -z "$repo_window_id" ]]; then
+        if ! repo_window_id="$(tmux new-window -d -P -F '#{window_id}' \
+            -b -t "=$session_name:^" -n "$session_name" -c "$project_root" yazi)"; then
+            return 1
+        fi
+        tmux set-option -w -t "$repo_window_id" @shipyard_role repo
+    else
+        first_window_id="$(tmux list-windows -t "=$session_name" -F '#{window_id}' | head -n 1)"
+        if [[ "$repo_window_id" != "$first_window_id" ]]; then
+            tmux move-window -b -s "$repo_window_id" -t "=$session_name:^"
+        fi
+    fi
+
+    printf '%s\n' "$repo_window_id"
+}
+
 # Unlike `forge new`, these windows are not leased from Treehouse and carry no
 # intent metadata or watcher. The repo window runs Yazi at the project root;
 # the command window remains a plain shell for repository-wide commands.
@@ -112,13 +138,8 @@ shipyard_open() {
         tmux set-option -t "$session_name" @shipyard_project_root "$project_root"
         tmux set-option -w -t "$repo_window_id" @shipyard_role repo
     else
-        repo_window_id="$(shipyard_repo_window "$session_name")"
-        if [[ -z "$repo_window_id" ]]; then
-            if ! repo_window_id="$(tmux new-window -d -P -F '#{window_id}' \
-                -t "=$session_name:" -n "$session_name" -c "$project_root" yazi)"; then
-                return 1
-            fi
-            tmux set-option -w -t "$repo_window_id" @shipyard_role repo
+        if ! repo_window_id="$(shipyard_ensure_repo_window "$session_name" "$project_root")"; then
+            return 1
         fi
     fi
 
@@ -237,6 +258,11 @@ shipyard_new() {
         return 1
     fi
 
+    if ! command -v yazi >/dev/null 2>&1; then
+        printf 'forge: yazi is not installed\n' >&2
+        return 1
+    fi
+
     session_name="$(shipyard_session_for_project "$project_root")"
     shipyard_reconcile
     lease_holder="shipyard:${session_name}:${intent}"
@@ -284,6 +310,12 @@ shipyard_new() {
             shipyard_reap "$pending_window_id" || true
             return 1
         fi
+    fi
+
+    if ! shipyard_ensure_repo_window "$session_name" "$project_root" >/dev/null; then
+        tmux kill-window -t "$window_id" 2>/dev/null || true
+        shipyard_reap "$pending_window_id" || true
+        return 1
     fi
 
     top_pane_id="$(tmux display-message -p -t "$window_id" '#{pane_id}')"
