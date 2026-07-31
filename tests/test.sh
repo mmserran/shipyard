@@ -88,9 +88,38 @@ assert_equal() {
     printf 'ok - %s\n' "$label"
 }
 
-# These run before any other shipyard session exists, so the "no other repo
-# open" case can be tested for real instead of having to fake an empty
-# tmux list-sessions.
+# These run before any other shipyard session exists, so the "no shipyard
+# windows open" case can be tested for real instead of having to fake an
+# empty tmux list-sessions.
+switch_client_target=""
+no_windows_output="$(TMUX="test" shipyard_attach)"
+assert_equal "No existing shipyard windows are open" "$no_windows_output" \
+    "forge with no args reports when no shipyard windows are open"
+assert_equal "" "$switch_client_target" \
+    "forge with no args does not switch clients when nothing is open"
+
+tmux new-session -d -s attach-command -n command -c "$test_tmp"
+tmux set-option -t attach-command @shipyard_project_root "$test_tmp/attach-command"
+attach_command_window="$(tmux display-message -p -t attach-command '#{window_id}')"
+tmux set-option -w -t "$attach_command_window" @shipyard_role command
+
+switch_client_target=""
+TMUX="test" shipyard_attach
+assert_equal "$attach_command_window" "$switch_client_target" \
+    "forge with no args attaches to an existing shipyard command window"
+tmux kill-session -t attach-command
+
+tmux new-session -d -s attach-repo -n repo -c "$test_tmp"
+tmux set-option -t attach-repo @shipyard_project_root "$test_tmp/attach-repo"
+attach_repo_window="$(tmux display-message -p -t attach-repo '#{window_id}')"
+tmux set-option -w -t "$attach_repo_window" @shipyard_role repo
+
+switch_client_target=""
+TMUX="test" shipyard_attach
+assert_equal "$attach_repo_window" "$switch_client_target" \
+    "forge with no args falls back to the Yazi repo window when no command window exists"
+tmux kill-session -t attach-repo
+
 switch_client_target=""
 tmux new-session -d -s close-cmd-solo -n command -c "$test_tmp"
 tmux set-option -t close-cmd-solo @shipyard_project_root "$test_tmp/close-cmd-solo"

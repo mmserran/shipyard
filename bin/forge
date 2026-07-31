@@ -26,6 +26,8 @@ forge_usage() {
 Shipyard coordinates AI-powered software development workflows.
 
 Usage:
+  forge               Attach to a pre-existing shipyard tmux window, if one
+                       is open; otherwise print a message and do nothing
   forge open [path]   Open (or create) a project's tmux session, Yazi repo
                        window, and command window; defaults to the current
                        directory
@@ -49,9 +51,13 @@ EOF
 }
 
 main() {
-    local command="${1:-help}"
+    local command="${1:-attach}"
 
     case "$command" in
+        attach)
+            shipyard_attach
+            ;;
+
         open)
             shift
             shipyard_open "${1:-.}"

@@ -179,6 +179,41 @@ shipyard_open() {
     fi
 }
 
+# Attaches to the first pre-existing shipyard session's command (or repo)
+# window. Unlike shipyard_open, this never creates a session -- it only
+# reattaches to one that's already running, so plain `forge` is safe to run
+# without accidentally spinning up a project session from the wrong directory.
+shipyard_attach() {
+    local session_name
+    local window_id
+
+    if ! command -v tmux >/dev/null 2>&1; then
+        printf 'forge: tmux is not installed\n' >&2
+        return 1
+    fi
+
+    while IFS= read -r session_name; do
+        [[ -n "$session_name" ]] || continue
+        [[ -n "$(tmux show-options -qv -t "$session_name" @shipyard_project_root 2>/dev/null)" ]] || continue
+
+        window_id="$(shipyard_command_window "$session_name")"
+        if [[ -z "$window_id" ]]; then
+            window_id="$(shipyard_repo_window "$session_name")"
+        fi
+        [[ -n "$window_id" ]] || continue
+
+        if [[ -n "${TMUX:-}" ]]; then
+            tmux switch-client -t "$window_id"
+        else
+            tmux select-window -t "$window_id"
+            tmux attach-session -t "=$session_name"
+        fi
+        return
+    done < <(tmux list-sessions -F '#{session_name}' 2>/dev/null)
+
+    printf 'No existing shipyard windows are open\n'
+}
+
 shipyard_state_home() {
     printf '%s/shipyard' "${XDG_STATE_HOME:-$HOME/.local/state}"
 }
