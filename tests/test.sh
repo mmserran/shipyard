@@ -930,6 +930,8 @@ assert_equal "command" \
 assert_equal "open-repo  $(git -C "$open_repo" branch --show-current)" \
     "$(tmux show-options -pqv -t "$open_window" @shipyard_context)" \
     "forge open initializes the command pane repository and branch context"
+assert_equal "$open_window" "$switch_client_target" \
+    "forge open switches to the command window"
 
 TMUX="test" shipyard_open "$open_repo"
 command_window_count="$(tmux list-windows -t "=$open_session" \

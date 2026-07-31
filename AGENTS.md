@@ -40,3 +40,9 @@ Shipyard (not the agent) owns worktree allocation, tmux windows, and state track
 - no-mistakes fails and you can't confidently fix it
 
 No-mistakes validation/push/PR-creation are pre-authorized; merging is not.
+
+## Git Commit Trailers
+
+Add authorship with `git commit --trailer "Co-Authored-By: [ToolName] [Model] <[identifier]>"`.
+
+Substitute `<[identifier]>` with your AI tool's official service email address (e.g., `noreply@openai.com` for Codex or `gemini-code-assist@google.com` for Gemini models).

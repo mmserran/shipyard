@@ -95,12 +95,12 @@ forge open ~/projects/my-app
 ```
 
 Opens (creating if needed) the project's tmux session, ensures its two
-repository-level windows exist, and switches to the repo-named Yazi window.
-That window is rooted in the project and doubles as the clickable repository
-label in the status bar. The `command` window remains a plain shell rooted in
-the project itself for commands that operate on the repository as a whole
-rather than on a specific intent. Neither window is leased from Treehouse or
-tied to a unit of work.
+repository-level windows exist, and switches to the `command` window. That
+window is a plain shell rooted in the project for commands that operate on the
+repository as a whole rather than on a specific intent. The repo-named Yazi
+window remains available at the left of the window list and doubles as the
+clickable repository label in the status bar. Neither window is leased from
+Treehouse or tied to a unit of work.
 
 Repeated calls reuse both windows instead of creating duplicates. If the Yazi
 window was manually killed through tmux, the next `forge open` (or `forge new`)
