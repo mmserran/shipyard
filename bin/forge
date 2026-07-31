@@ -26,14 +26,15 @@ forge_usage() {
 Shipyard coordinates AI-powered software development workflows.
 
 Usage:
-  forge open [path]   Open (or create) a project's tmux session and its
-                       command window; defaults to the current directory
+  forge open [path]   Open (or create) a project's tmux session, Yazi repo
+                       window, and command window; defaults to the current
+                       directory
   forge new <intent>  Create an intent window in a leased Treehouse worktree
   forge close         Force-close this window: abort any active no-mistakes
                        run for it, discard uncommitted changes, and return
                        the Treehouse lease. On a repo's command window,
-                       instead just closes the window and switches to
-                       another open shipyard repo's command window, if any
+                       instead just closes that window. The Yazi repo window
+                       is protected from forge close
 
   forge publish-screenshot <file> [<file> ...]
                        Upload screenshot(s) to a rolling GitHub Release and

@@ -2,7 +2,8 @@
 
 Shipyard presents intent-oriented development workflows in tmux. Each tmux
 session owns one repository, with intent windows backed by leased Treehouse
-worktrees and an optional command window rooted in the repository itself.
+worktrees, a Yazi repo window, and an optional command window rooted in the
+repository itself.
 
 ## Setup
 
@@ -19,8 +20,8 @@ Source Shipyard's presentation layer from `~/.tmux.conf`:
 source-file ~/.config/shipyard/tmux.conf
 ```
 
-Shipyard requires `tmux` and `treehouse`. Automatic PR state additionally uses
-`no-mistakes` and the authenticated GitHub CLI, `gh`.
+Shipyard requires `tmux`, `treehouse`, and `yazi`. Automatic PR state
+additionally uses `no-mistakes` and the authenticated GitHub CLI, `gh`.
 
 ## Create a unit of work
 
@@ -40,9 +41,11 @@ Shipyard:
 4. creates an intent window rooted in that worktree, split into a top pane
    (75% of the height) for the main work and a bottom pane (25%) for a
    secondary tool, with focus on the top pane;
-5. records enough lease identity for safe automatic cleanup;
-6. starts a state watcher; and
-7. opens an ordinary shell without starting an agent.
+5. ensures the leftmost repo-named Yazi window exists so the status bar keeps
+   a clickable repository label even before `forge open`;
+6. records enough lease identity for safe automatic cleanup;
+7. starts a state watcher; and
+8. opens an ordinary shell without starting an agent.
 
 If the remote's default branch cannot be resolved or fetched, `forge new`
 warns and continues from the worktree's existing checkout.
@@ -77,22 +80,29 @@ preserved.
 
 In a project's command window, `forge close` closes that window without lease
 cleanup. If another Shipyard project is open, the tmux client switches to its
-command window first; otherwise tmux falls back normally, detaching or exiting
-when no session remains. Unleased windows not marked as command windows are
-still rejected.
+Yazi window first; otherwise tmux falls back normally, detaching or exiting
+when no session remains. The repository's Yazi window is protected from
+`forge close`; it can still be killed through tmux directly. Other unleased
+windows are rejected.
 
-## Open a project's command window
+## Open a project's repo windows
 
 ```bash
 forge open
 forge open ~/projects/my-app
 ```
 
-Opens (creating if needed) the project's tmux session and switches to its
-`command` window: a plain shell rooted in the project itself, not leased from
-Treehouse and not tied to any unit of work. Use it for commands that operate
-on the repository as a whole rather than on a specific intent. Repeated calls
-reuse the same command window instead of creating another one.
+Opens (creating if needed) the project's tmux session, ensures its two
+repository-level windows exist, and switches to the repo-named Yazi window.
+That window is rooted in the project and doubles as the clickable repository
+label in the status bar. The `command` window remains a plain shell rooted in
+the project itself for commands that operate on the repository as a whole
+rather than on a specific intent. Neither window is leased from Treehouse or
+tied to a unit of work.
+
+Repeated calls reuse both windows instead of creating duplicates. If the Yazi
+window was manually killed through tmux, the next `forge open` (or `forge new`)
+recreates it at the left of the window list.
 
 If the session doesn't exist yet, `forge open` creates it, so it also works
 as a way to open a new tmux session for a repository you haven't started
@@ -144,8 +154,8 @@ The status bar contains:
 project   💡 intent-a   ● intent-b   🔔 intent-c       2026-10-22 00:53
 ```
 
-- Left: the stable repository session name
-- Center: intent windows and their current badges
+- Left: the repo-named Yazi window, selectable like any other tmux window
+- Center: the command window plus intent windows and their current badges
 - Right: local date and time
 
 Every pane border independently shows its current `repository  branch`. Prompt
@@ -188,9 +198,9 @@ because it does not repair PR comments or non-image local links.
 ## Commands
 
 ```text
-forge open [path]
+forge open [path]  # open/create the repo's Yazi and command windows
 forge new <intent>
-forge close  # close the current intent or command window
+forge close  # close the current intent or command window (not the Yazi window)
 forge build  # manually override the state to building
 forge alert
 forge status
