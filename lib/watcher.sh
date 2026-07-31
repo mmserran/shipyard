@@ -92,13 +92,40 @@ watcher_attach_pane_live() {
         grep -Fxq '1 no-mistakes'
 }
 
+watcher_main_pane() {
+    local window_id="$1"
+
+    tmux list-panes -t "$window_id" \
+        -F '#{pane_id}|#{@shipyard_main_pane}|#{pane_top}|#{pane_left}' 2>/dev/null |
+        awk -F '|' '
+            $2 == "1" {
+                tagged = $1
+                next
+            }
+            candidate == "" || $3 < top || ($3 == top && $4 < left) {
+                candidate = $1
+                top = $3
+                left = $4
+            }
+            END {
+                if (tagged != "")
+                    print tagged
+                else if (candidate != "")
+                    print candidate
+            }
+        '
+}
+
 watcher_ensure_attach_pane() {
     local window_id="$1"
     local worktree="$2"
+    local main_pane_id
     local pane_id
 
     watcher_attach_pane_live "$window_id" && return 0
-    pane_id="$(tmux split-window -h -P -F '#{pane_id}' -t "$window_id" \
+    main_pane_id="$(watcher_main_pane "$window_id")"
+    [[ -n "$main_pane_id" ]] || return
+    pane_id="$(tmux split-window -h -p 33 -P -F '#{pane_id}' -t "$main_pane_id" \
         -c "$worktree" -- no-mistakes attach)" || return
     tmux set-option -p -t "$pane_id" @shipyard_attach_pane 1
 }
