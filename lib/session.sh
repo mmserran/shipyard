@@ -170,7 +170,7 @@ shipyard_open() {
     shipyard_refresh_window_context "$command_window_id"
     shipyard_refresh_intent_numbers "$session_name"
 
-    window_id="$repo_window_id"
+    window_id="$command_window_id"
     if [[ -n "${TMUX:-}" ]]; then
         tmux switch-client -t "$window_id"
     else
