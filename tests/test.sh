@@ -8,6 +8,10 @@ repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 test_tmp="$(mktemp -d)"
 test_socket="shipyard-tests-$$"
 
+mkdir -p "$test_tmp/bin"
+printf '#!/usr/bin/env bash\nsleep 300\n' > "$test_tmp/bin/yazi"
+chmod +x "$test_tmp/bin/yazi"
+
 cleanup() {
     command tmux -L "$test_socket" kill-server 2>/dev/null || true
     rm -rf "$test_tmp"
@@ -17,6 +21,7 @@ trap cleanup EXIT
 export XDG_STATE_HOME="$test_tmp/state"
 export TMUX="test"
 export SHIPYARD_HOME="$repo_root"
+export PATH="$test_tmp/bin:$PATH"
 
 # shellcheck source=../lib/context.sh
 source "$repo_root/lib/context.sh"
@@ -92,42 +97,67 @@ tmux set-option -t close-cmd-solo @shipyard_project_root "$test_tmp/close-cmd-so
 solo_command_window="$(tmux display-message -p -t close-cmd-solo '#{window_id}')"
 solo_command_pane="$(tmux display-message -p -t close-cmd-solo '#{pane_id}')"
 tmux set-option -w -t "$solo_command_window" @shipyard_role command
+solo_repo_window="$(tmux new-window -d -P -F '#{window_id}' -t close-cmd-solo -n close-cmd-solo -c "$test_tmp")"
+tmux set-option -w -t "$solo_repo_window" @shipyard_role repo
 
 TMUX_PANE="$solo_command_pane" shipyard_close
 assert_equal "" "$switch_client_target" \
     "closing a command window with no other shipyard repo open does not switch clients"
-if tmux has-session -t "=close-cmd-solo" 2>/dev/null; then
-    printf 'not ok - closing the only command window closes its session\n' >&2
+if ! tmux has-session -t "=close-cmd-solo" 2>/dev/null; then
+    printf 'not ok - closing a command window leaves its repo window open\n' >&2
     exit 1
 fi
-printf 'ok - closing the only command window closes its session\n'
+printf 'ok - closing a command window leaves its repo window open\n'
+tmux kill-session -t close-cmd-solo
 
 tmux new-session -d -s close-cmd-other -n command -c "$test_tmp"
 tmux set-option -t close-cmd-other @shipyard_project_root "$test_tmp/close-cmd-other"
 other_command_window="$(tmux display-message -p -t close-cmd-other '#{window_id}')"
 tmux set-option -w -t "$other_command_window" @shipyard_role command
+other_repo_window="$(tmux new-window -d -P -F '#{window_id}' -t close-cmd-other -n close-cmd-other -c "$test_tmp")"
+tmux set-option -w -t "$other_repo_window" @shipyard_role repo
 
 tmux new-session -d -s close-cmd-mine -n command -c "$test_tmp"
 tmux set-option -t close-cmd-mine @shipyard_project_root "$test_tmp/close-cmd-mine"
 mine_command_window="$(tmux display-message -p -t close-cmd-mine '#{window_id}')"
 mine_command_pane="$(tmux display-message -p -t close-cmd-mine '#{pane_id}')"
 tmux set-option -w -t "$mine_command_window" @shipyard_role command
+mine_repo_window="$(tmux new-window -d -P -F '#{window_id}' -t close-cmd-mine -n close-cmd-mine -c "$test_tmp")"
+tmux set-option -w -t "$mine_repo_window" @shipyard_role repo
 
 switch_client_target=""
 TMUX_PANE="$mine_command_pane" shipyard_close
-assert_equal "$other_command_window" "$switch_client_target" \
-    "closing a command window with another shipyard repo open switches to its command window"
-if tmux has-session -t "=close-cmd-mine" 2>/dev/null; then
-    printf 'not ok - closing a command window closes its own session\n' >&2
+assert_equal "$other_repo_window" "$switch_client_target" \
+    "closing a command window with another Shipyard repo open switches to its Yazi window"
+if ! tmux has-session -t "=close-cmd-mine" 2>/dev/null; then
+    printf 'not ok - closing a command window preserves its repo session\n' >&2
     exit 1
 fi
-printf 'ok - closing a command window closes its own session\n'
+printf 'ok - closing a command window preserves its repo session\n'
 if ! tmux has-session -t "=close-cmd-other" 2>/dev/null; then
     printf 'not ok - closing a command window leaves the other shipyard repo open\n' >&2
     exit 1
 fi
 printf 'ok - closing a command window leaves the other shipyard repo open\n'
 tmux kill-session -t close-cmd-other 2>/dev/null || true
+tmux kill-session -t close-cmd-mine 2>/dev/null || true
+
+tmux new-session -d -s close-repo -n close-repo -c "$test_tmp"
+tmux set-option -t close-repo @shipyard_project_root "$test_tmp/close-repo"
+protected_repo_window="$(tmux display-message -p -t close-repo '#{window_id}')"
+protected_repo_pane="$(tmux display-message -p -t close-repo '#{pane_id}')"
+tmux set-option -w -t "$protected_repo_window" @shipyard_role repo
+if TMUX_PANE="$protected_repo_pane" shipyard_close 2>/dev/null; then
+    printf 'not ok - forge close refuses the Yazi repo window\n' >&2
+    exit 1
+fi
+if ! tmux has-session -t "=close-repo" 2>/dev/null; then
+    printf 'not ok - the protected Yazi repo window remains open\n' >&2
+    exit 1
+fi
+printf 'ok - forge close refuses the Yazi repo window\n'
+printf 'ok - the protected Yazi repo window remains open\n'
+tmux kill-session -t close-repo
 
 tmux new-session -d -s close-cmd-norole -n intent -c "$test_tmp"
 norole_window="$(tmux display-message -p -t close-cmd-norole '#{window_id}')"
@@ -809,6 +839,17 @@ if ! tmux has-session -t "=$open_session" 2>/dev/null; then
 fi
 printf 'ok - forge open creates the project session\n'
 
+repo_window="$(shipyard_repo_window "$open_session")"
+assert_equal "$open_session" \
+    "$(tmux display-message -p -t "$repo_window" '#{window_name}')" \
+    "forge open names the Yazi window after the repository session"
+assert_equal "repo" \
+    "$(tmux show-options -wqv -t "$repo_window" @shipyard_role)" \
+    "forge open tags the Yazi window with the repo role"
+assert_equal "yazi" \
+    "$(tmux display-message -p -t "$repo_window" '#{pane_start_command}')" \
+    "forge open starts Yazi in the repo window"
+
 open_window="$(shipyard_command_window "$open_session")"
 assert_equal "command" \
     "$(tmux display-message -p -t "$open_window" '#{window_name}')" \
@@ -822,6 +863,19 @@ command_window_count="$(tmux list-windows -t "=$open_session" \
     -F '#{@shipyard_role}' | grep -Fxc 'command' || true)"
 assert_equal "1" "$command_window_count" \
     "repeated forge open reuses the same command window"
+repo_window_count="$(tmux list-windows -t "=$open_session" \
+    -F '#{@shipyard_role}' | grep -Fxc 'repo' || true)"
+assert_equal "1" "$repo_window_count" \
+    "repeated forge open reuses the same Yazi repo window"
+
+tmux kill-window -t "$repo_window"
+TMUX="test" shipyard_open "$open_repo"
+replacement_repo_window="$(shipyard_repo_window "$open_session")"
+if [[ -z "$replacement_repo_window" || "$replacement_repo_window" == "$repo_window" ]]; then
+    printf 'not ok - forge open recreates a manually closed Yazi repo window\n' >&2
+    exit 1
+fi
+printf 'ok - forge open recreates a manually closed Yazi repo window\n'
 
 TMUX="test" shipyard_new "intent workflow"
 intent_window="$(tmux list-windows -a -F '#{window_name} #{window_id}' |

@@ -74,13 +74,22 @@ shipyard_command_window() {
         awk '$2 == "command" {print $1; exit}'
 }
 
-# Unlike `forge new`, this window is not leased from Treehouse and carries no
-# intent metadata or watcher: it's a plain shell rooted in the project itself,
-# for commands that operate on the repository rather than a unit of work.
+shipyard_repo_window() {
+    local session_name="$1"
+
+    tmux list-windows -t "=$session_name" -F '#{window_id} #{@shipyard_role}' 2>/dev/null |
+        awk '$2 == "repo" {print $1; exit}'
+}
+
+# Unlike `forge new`, these windows are not leased from Treehouse and carry no
+# intent metadata or watcher. The repo window runs Yazi at the project root;
+# the command window remains a plain shell for repository-wide commands.
 shipyard_open() {
     local requested_path="${1:-.}"
     local project_root
     local session_name
+    local repo_window_id
+    local command_window_id
     local window_id
 
     project_root="$(shipyard_project_root "$requested_path")" || return
@@ -88,27 +97,41 @@ shipyard_open() {
         printf 'forge: tmux is not installed\n' >&2
         return 1
     fi
+    if ! command -v yazi >/dev/null 2>&1; then
+        printf 'forge: yazi is not installed\n' >&2
+        return 1
+    fi
 
     session_name="$(shipyard_session_for_project "$project_root")"
 
     if ! tmux has-session -t "=$session_name" 2>/dev/null; then
-        if ! window_id="$(tmux new-session -d -P -F '#{window_id}' \
-            -s "$session_name" -n command -c "$project_root")"; then
+        if ! repo_window_id="$(tmux new-session -d -P -F '#{window_id}' \
+            -s "$session_name" -n "$session_name" -c "$project_root" yazi)"; then
             return 1
         fi
         tmux set-option -t "$session_name" @shipyard_project_root "$project_root"
-        tmux set-option -w -t "$window_id" @shipyard_role command
+        tmux set-option -w -t "$repo_window_id" @shipyard_role repo
     else
-        window_id="$(shipyard_command_window "$session_name")"
-        if [[ -z "$window_id" ]]; then
-            if ! window_id="$(tmux new-window -d -P -F '#{window_id}' \
-                -t "=$session_name:" -n command -c "$project_root")"; then
+        repo_window_id="$(shipyard_repo_window "$session_name")"
+        if [[ -z "$repo_window_id" ]]; then
+            if ! repo_window_id="$(tmux new-window -d -P -F '#{window_id}' \
+                -t "=$session_name:" -n "$session_name" -c "$project_root" yazi)"; then
                 return 1
             fi
-            tmux set-option -w -t "$window_id" @shipyard_role command
+            tmux set-option -w -t "$repo_window_id" @shipyard_role repo
         fi
     fi
 
+    command_window_id="$(shipyard_command_window "$session_name")"
+    if [[ -z "$command_window_id" ]]; then
+        if ! command_window_id="$(tmux new-window -d -P -F '#{window_id}' \
+                -t "=$session_name:" -n command -c "$project_root")"; then
+            return 1
+        fi
+        tmux set-option -w -t "$command_window_id" @shipyard_role command
+    fi
+
+    window_id="$repo_window_id"
     if [[ -n "${TMUX:-}" ]]; then
         tmux switch-client -t "$window_id"
     else
@@ -299,7 +322,8 @@ shipyard_new() {
 # work out from under it.
 #
 # On a command window there is no lease to return, so it just closes the
-# window and hands the client to another open shipyard repo instead.
+# window and hands the client to another open Shipyard repo instead. The repo
+# window is persistent infrastructure and cannot be closed through forge.
 shipyard_close() {
     local window_id
     local worktree
@@ -321,6 +345,10 @@ shipyard_close() {
         if [[ "$role" == command ]]; then
             shipyard_close_command_window "$window_id"
             return
+        fi
+        if [[ "$role" == repo ]]; then
+            printf 'forge: the repository Yazi window cannot be closed with forge close\n' >&2
+            return 1
         fi
         printf 'forge: not a leased intent window\n' >&2
         return 1
@@ -351,9 +379,9 @@ shipyard_close() {
     tmux kill-window -t "$window_id"
 }
 
-# Finds another open repo's command window, so shipyard_close_command_window
-# can hand the client straight to it instead of leaving tmux to fall back to
-# whatever window it last happened to be viewing.
+# Finds another open repo's Yazi window (or its command window for compatibility
+# with sessions created by an older Shipyard), so closing a command window can
+# hand the client straight to that repository.
 shipyard_next_repo_window() {
     local exclude_session="$1"
     local session_name
@@ -362,7 +390,10 @@ shipyard_next_repo_window() {
     while IFS= read -r session_name; do
         [[ -n "$session_name" && "$session_name" != "$exclude_session" ]] || continue
         [[ -n "$(tmux show-options -qv -t "$session_name" @shipyard_project_root 2>/dev/null)" ]] || continue
-        candidate="$(shipyard_command_window "$session_name")"
+        candidate="$(shipyard_repo_window "$session_name")"
+        if [[ -z "$candidate" ]]; then
+            candidate="$(shipyard_command_window "$session_name")"
+        fi
         [[ -n "$candidate" ]] || continue
         printf '%s\n' "$candidate"
         return
