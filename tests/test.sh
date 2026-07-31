@@ -57,8 +57,14 @@ tmux() {
         attach_pane_tag="$*"
         return 0
     fi
-    if [[ "$1" == "list-panes" && -n "${attach_pane_list:-}" ]]; then
+    if [[ "$1" == "list-panes" && "$*" == *"@shipyard_attach_pane"* &&
+        -n "${attach_pane_list:-}" ]]; then
         printf '%s\n' "$attach_pane_list"
+        return 0
+    fi
+    if [[ "$1" == "list-panes" && "$*" == *"@shipyard_main_pane"* &&
+        -n "${main_pane_list:-}" ]]; then
+        printf '%s\n' "$main_pane_list"
         return 0
     fi
     command tmux -L "$test_socket" "$@"
@@ -238,14 +244,15 @@ assert_equal "https://example.test/pull/1" \
 
 : > "$test_tmp/split-window"
 attach_pane_tag=""
+main_pane_list=$'%main-fallback||0|0\n%bottom||75|0'
 watcher_ensure_attach_pane "$window_id" "$repo_root"
 split_window_launch="$(<"$test_tmp/split-window")"
 case "$split_window_launch" in
-    *"-h"*"-P"*"-F #{pane_id}"*"-t $window_id"*"$repo_root"*"no-mistakes attach")
-        printf 'ok - opens a side-by-side pane running no-mistakes attach\n'
+    *"-h"*"-p 33"*"-P"*"-F #{pane_id}"*"-t %main-fallback"*"$repo_root"*"no-mistakes attach")
+        printf 'ok - opens a one-third-width attach pane beside the upper pane\n'
         ;;
     *)
-        printf 'not ok - opens a side-by-side pane running no-mistakes attach\n%s\n' \
+        printf 'not ok - opens a one-third-width attach pane beside the upper pane\n%s\n' \
             "$split_window_launch" >&2
         exit 1
         ;;
@@ -253,6 +260,21 @@ esac
 assert_equal "set-option -p -t %attach-test @shipyard_attach_pane 1" \
     "$attach_pane_tag" \
     "tags the watcher-created attach pane"
+
+: > "$test_tmp/split-window"
+main_pane_list=$'%upper-left||0|0\n%tagged|1|0|80\n%bottom||75|0'
+watcher_ensure_attach_pane "$window_id" "$repo_root"
+split_window_launch="$(<"$test_tmp/split-window")"
+case "$split_window_launch" in
+    *"-t %tagged"*)
+        printf 'ok - prefers the tagged main pane over pane geometry\n'
+        ;;
+    *)
+        printf 'not ok - prefers the tagged main pane over pane geometry\n%s\n' \
+            "$split_window_launch" >&2
+        exit 1
+        ;;
+esac
 
 : > "$test_tmp/split-window"
 attach_pane_list=" no-mistakes"
@@ -274,7 +296,7 @@ watcher_ensure_attach_pane "$window_id" "$repo_root"
 split_window_launch="$(<"$test_tmp/split-window")"
 assert_equal "" "$split_window_launch" \
     "does not reopen the attach pane while one is already live"
-unset attach_pane_list
+unset attach_pane_list main_pane_list
 
 shipyard_refresh_window_context "$window_id"
 expected_branch="$(git -C "$repo_root" branch --show-current)"
@@ -816,6 +838,19 @@ assert_equal "bash" \
 assert_equal "2" \
     "$(tmux list-panes -t "$intent_window" | wc -l | tr -d ' ')" \
     "forge new opens a two-pane layout"
+intent_main_pane="$(tmux list-panes -t "$intent_window" \
+    -F '#{@shipyard_main_pane}|#{pane_id}' | sed -n 's/^1|//p')"
+if [[ -z "$intent_main_pane" ]]; then
+    printf 'not ok - forge new tags its main pane\n' >&2
+    exit 1
+fi
+printf 'ok - forge new tags its main pane\n'
+intent_bottom_pane="$(tmux list-panes -t "$intent_window" \
+    -F '#{@shipyard_main_pane}|#{pane_id}' | sed -n 's/^|//p')"
+tmux select-pane -t "$intent_bottom_pane"
+assert_equal "$intent_main_pane" \
+    "$(watcher_main_pane "$intent_window")" \
+    "watcher resolves the main pane while the bottom pane is active"
 intent_pane_heights="$(tmux list-panes -t "$intent_window" -F '#{pane_top} #{pane_height}' | sort -n)"
 intent_top_height="$(awk 'NR==1{print $2}' <<<"$intent_pane_heights")"
 intent_bottom_height="$(awk 'NR==2{print $2}' <<<"$intent_pane_heights")"

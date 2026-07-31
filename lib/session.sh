@@ -264,6 +264,7 @@ shipyard_new() {
     fi
 
     top_pane_id="$(tmux display-message -p -t "$window_id" '#{pane_id}')"
+    tmux set-option -p -t "$top_pane_id" @shipyard_main_pane 1
     tmux split-window -v -p 25 -t "$window_id" -c "$worktree"
     tmux select-pane -t "$top_pane_id"
 

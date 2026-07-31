@@ -130,9 +130,10 @@ or a worktree still detached at its leased commit, don't trigger it. Blocking
 remains explicit; validation, publication, failure, and merge are observed
 from no-mistakes and GitHub.
 
-While a run is active, the window watcher also opens a side-by-side pane
-running `no-mistakes attach`, so a human can watch the TUI without leaving the
-window. The pane is left open after the run finishes; it's only reopened if it
+While a run is active, the window watcher splits the upper main pane and gives
+one-third of that row to `no-mistakes attach`, so a human can watch the TUI
+without leaving the window. This placement is independent of which pane is
+active. The pane is left open after the run finishes; it's only reopened if it
 isn't already running (closed by hand, or its process exited).
 
 ## Pane and status context
