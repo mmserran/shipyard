@@ -103,12 +103,11 @@ tmux set-option -w -t "$solo_repo_window" @shipyard_role repo
 TMUX_PANE="$solo_command_pane" shipyard_close
 assert_equal "" "$switch_client_target" \
     "closing a command window with no other shipyard repo open does not switch clients"
-if ! tmux has-session -t "=close-cmd-solo" 2>/dev/null; then
-    printf 'not ok - closing a command window leaves its repo window open\n' >&2
+if tmux has-session -t "=close-cmd-solo" 2>/dev/null; then
+    printf 'not ok - closing a command window closes its repository session\n' >&2
     exit 1
 fi
-printf 'ok - closing a command window leaves its repo window open\n'
-tmux kill-session -t close-cmd-solo
+printf 'ok - closing a command window closes its repository session\n'
 
 tmux new-session -d -s close-cmd-other -n command -c "$test_tmp"
 tmux set-option -t close-cmd-other @shipyard_project_root "$test_tmp/close-cmd-other"
@@ -129,18 +128,17 @@ switch_client_target=""
 TMUX_PANE="$mine_command_pane" shipyard_close
 assert_equal "$other_repo_window" "$switch_client_target" \
     "closing a command window with another Shipyard repo open switches to its Yazi window"
-if ! tmux has-session -t "=close-cmd-mine" 2>/dev/null; then
-    printf 'not ok - closing a command window preserves its repo session\n' >&2
+if tmux has-session -t "=close-cmd-mine" 2>/dev/null; then
+    printf 'not ok - closing a command window removes its repo session\n' >&2
     exit 1
 fi
-printf 'ok - closing a command window preserves its repo session\n'
+printf 'ok - closing a command window removes its repo session\n'
 if ! tmux has-session -t "=close-cmd-other" 2>/dev/null; then
     printf 'not ok - closing a command window leaves the other shipyard repo open\n' >&2
     exit 1
 fi
 printf 'ok - closing a command window leaves the other shipyard repo open\n'
 tmux kill-session -t close-cmd-other 2>/dev/null || true
-tmux kill-session -t close-cmd-mine 2>/dev/null || true
 
 tmux new-session -d -s close-repo -n close-repo -c "$test_tmp"
 tmux set-option -t close-repo @shipyard_project_root "$test_tmp/close-repo"
@@ -168,6 +166,26 @@ if TMUX_PANE="$norole_pane" shipyard_close 2>/dev/null; then
 fi
 printf 'ok - forge close still refuses an unleased, non-command window\n'
 tmux kill-session -t close-cmd-norole 2>/dev/null || true
+
+tmux new-session -d -s intent-numbers -n repo -c "$test_tmp"
+number_repo_window="$(tmux display-message -p -t intent-numbers '#{window_id}')"
+tmux set-option -w -t "$number_repo_window" @shipyard_role repo
+number_command_window="$(tmux new-window -d -P -F '#{window_id}' -t intent-numbers -n command -c "$test_tmp")"
+tmux set-option -w -t "$number_command_window" @shipyard_role command
+number_intent_one="$(tmux new-window -d -P -F '#{window_id}' -t intent-numbers -n one -c "$test_tmp")"
+tmux set-option -w -t "$number_intent_one" @shipyard_worktree /tmp/one
+number_intent_two="$(tmux new-window -d -P -F '#{window_id}' -t intent-numbers -n two -c "$test_tmp")"
+tmux set-option -w -t "$number_intent_two" @shipyard_worktree /tmp/two
+shipyard_refresh_intent_numbers intent-numbers
+assert_equal "1" "$(tmux show-options -wqv -t "$number_intent_one" @shipyard_intent_number)" \
+    "intent numbering ignores repo and command windows"
+assert_equal "2" "$(tmux show-options -wqv -t "$number_intent_two" @shipyard_intent_number)" \
+    "intent numbering increments in window order"
+tmux kill-window -t "$number_intent_one"
+shipyard_refresh_intent_numbers intent-numbers
+assert_equal "1" "$(tmux show-options -wqv -t "$number_intent_two" @shipyard_intent_number)" \
+    "remaining intent windows renumber from 1"
+tmux kill-session -t intent-numbers
 
 tmux new-session -d -s testrepo -n intent -c "$repo_root"
 tmux set-option -t testrepo @shipyard_project_root "$repo_root"
@@ -667,7 +685,8 @@ shipyard_record_lease "$close_window" "$exit_worktree" "lease-close-test" "holde
 shipyard_record_lease "%unrelated" "$exit_worktree" "zz-unrelated" "holder"
 
 export test_socket test_tmp returned_lease_file no_mistakes_active no_mistakes_aborted_file
-export -f tmux treehouse no-mistakes shipyard_close shipyard_forget_lease shipyard_state_home
+export -f tmux treehouse no-mistakes shipyard_close shipyard_close_intent_window \
+    shipyard_refresh_intent_numbers shipyard_forget_lease shipyard_state_home
 if TMUX_PANE="$close_pane" bash -e -c 'shipyard_close' 2>/dev/null; then
     printf 'ok - forge close returns the lease and closes a clean window\n'
 else
@@ -757,6 +776,29 @@ else
     exit 1
 fi
 tmux kill-window -t "$close_window" 2>/dev/null || true
+
+tmux new-session -d -s close-all-failure -n command -c "$repo_root"
+tmux set-option -t close-all-failure @shipyard_project_root "$repo_root"
+failed_command_window="$(tmux display-message -p -t close-all-failure '#{window_id}')"
+failed_command_pane="$(tmux display-message -p -t close-all-failure '#{pane_id}')"
+tmux set-option -w -t "$failed_command_window" @shipyard_role command
+failed_repo_window="$(tmux new-window -d -P -F '#{window_id}' -t close-all-failure -n repo -c "$repo_root")"
+tmux set-option -w -t "$failed_repo_window" @shipyard_role repo
+failed_intent_window="$(tmux new-window -d -P -F '#{window_id}' -t close-all-failure -n intent -c "$repo_root")"
+tmux set-option -w -t "$failed_intent_window" @shipyard_worktree "$repo_root"
+tmux set-option -w -t "$failed_intent_window" @shipyard_lease_id lease-close-all-failure
+shipyard_record_lease "$failed_intent_window" "$repo_root" lease-close-all-failure holder
+if TMUX_PANE="$failed_command_pane" shipyard_close 2>/dev/null; then
+    printf 'not ok - command close fails when an intent lease cannot be returned\n' >&2
+    exit 1
+fi
+if ! tmux has-session -t "=close-all-failure" 2>/dev/null; then
+    printf 'not ok - failed command close preserves the repository session\n' >&2
+    exit 1
+fi
+printf 'ok - failed command close preserves the repository session\n'
+tmux kill-session -t close-all-failure
+rm -f "$(shipyard_state_home)/windows/lease-close-all-failure.lease"
 unset -f no-mistakes
 treehouse() {
     case "$1" in
@@ -772,6 +814,34 @@ treehouse() {
             ;;
     esac
 }
+
+tmux new-session -d -s close-all-success -n command -c "$repo_root"
+tmux set-option -t close-all-success @shipyard_project_root "$repo_root"
+close_all_command_window="$(tmux display-message -p -t close-all-success '#{window_id}')"
+close_all_command_pane="$(tmux display-message -p -t close-all-success '#{pane_id}')"
+tmux set-option -w -t "$close_all_command_window" @shipyard_role command
+close_all_repo_window="$(tmux new-window -d -P -F '#{window_id}' -t close-all-success -n repo -c "$repo_root")"
+tmux set-option -w -t "$close_all_repo_window" @shipyard_role repo
+for close_all_number in 1 2; do
+    close_all_intent_window="$(tmux new-window -d -P -F '#{window_id}' \
+        -t close-all-success -n "intent-$close_all_number" -c "$repo_root")"
+    tmux set-option -w -t "$close_all_intent_window" @shipyard_worktree "$repo_root"
+    tmux set-option -w -t "$close_all_intent_window" @shipyard_lease_id "lease-close-all-$close_all_number"
+    shipyard_record_lease "$close_all_intent_window" "$repo_root" \
+        "lease-close-all-$close_all_number" holder
+done
+TMUX_PANE="$close_all_command_pane" shipyard_close
+if tmux has-session -t "=close-all-success" 2>/dev/null; then
+    printf 'not ok - command close removes repo, command, and intent windows\n' >&2
+    exit 1
+fi
+printf 'ok - command close removes repo, command, and intent windows\n'
+if [[ -e "$(shipyard_state_home)/windows/lease-close-all-1.lease" ||
+    -e "$(shipyard_state_home)/windows/lease-close-all-2.lease" ]]; then
+    printf 'not ok - command close forgets every returned intent lease\n' >&2
+    exit 1
+fi
+printf 'ok - command close forgets every returned intent lease\n'
 
 tmux new-session -d -s app -n existing
 tmux set-option -t app @shipyard_project_root "/client/app"
@@ -857,6 +927,9 @@ assert_equal "command" \
 assert_equal "command" \
     "$(tmux show-options -wqv -t "$open_window" @shipyard_role)" \
     "forge open tags the window with the command role"
+assert_equal "open-repo  $(git -C "$open_repo" branch --show-current)" \
+    "$(tmux show-options -pqv -t "$open_window" @shipyard_context)" \
+    "forge open initializes the command pane repository and branch context"
 
 TMUX="test" shipyard_open "$open_repo"
 command_window_count="$(tmux list-windows -t "=$open_session" \
@@ -889,6 +962,9 @@ assert_equal "intent workflow" \
 assert_equal " 💡" \
     "$(tmux show-options -wqv -t "$intent_window" @pipeline_badge)" \
     "forge new starts in planning"
+assert_equal "1" \
+    "$(tmux show-options -wqv -t "$intent_window" @shipyard_intent_number)" \
+    "the first intent window is numbered 1"
 assert_equal "bash" \
     "$(tmux display-message -p -t "$intent_window" '#{pane_current_command}')" \
     "forge new starts a shell rather than an agent"

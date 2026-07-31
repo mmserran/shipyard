@@ -78,12 +78,14 @@ discard, so it doesn't prompt — but it does report what it's discarding.
 If returning the lease fails, the window stays open and its cleanup record is
 preserved.
 
-In a project's command window, `forge close` closes that window without lease
-cleanup. If another Shipyard project is open, the tmux client switches to its
-Yazi window first; otherwise tmux falls back normally, detaching or exiting
-when no session remains. The repository's Yazi window is protected from
-`forge close`; it can still be killed through tmux directly. Other unleased
-windows are rejected.
+In a project's command window, `forge close` acts as a repository-wide close:
+it applies the same forced cleanup to every intent window, then closes the
+command and Yazi windows with their tmux session. If another Shipyard project
+is open, the tmux client switches to its Yazi window first; otherwise tmux
+falls back normally, detaching or exiting when no session remains. If any
+lease return fails, Shipyard stops and leaves the repository session open.
+The Yazi window itself remains protected from direct `forge close`; other
+unleased windows are rejected.
 
 ## Open a project's repo windows
 
@@ -151,11 +153,12 @@ isn't already running (closed by hand, or its process exited).
 The status bar contains:
 
 ```text
-project   💡 intent-a   ● intent-b   🔔 intent-c       2026-10-22 00:53
+project   command   1:💡 intent-a   2:● intent-b       2026-10-22 00:53
 ```
 
 - Left: the repo-named Yazi window, selectable like any other tmux window
-- Center: the command window plus intent windows and their current badges
+- Center: the unnumbered command window plus intent windows, numbered from 1,
+  and their current badges
 - Right: local date and time
 
 Every pane border independently shows its current `repository  branch`. Prompt
@@ -200,7 +203,7 @@ because it does not repair PR comments or non-image local links.
 ```text
 forge open [path]  # open/create the repo's Yazi and command windows
 forge new <intent>
-forge close  # close the current intent or command window (not the Yazi window)
+forge close  # close one intent, or the whole repo from its command window
 forge build  # manually override the state to building
 forge alert
 forge status
