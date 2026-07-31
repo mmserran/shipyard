@@ -201,6 +201,7 @@ because it does not repair PR comments or non-image local links.
 ## Commands
 
 ```text
+forge             # attach to a pre-existing shipyard window, if one is open
 forge open [path]  # open/create the repo's Yazi and command windows
 forge new <intent>
 forge close  # close one intent, or the whole repo from its command window
@@ -208,6 +209,7 @@ forge build  # manually override the state to building
 forge alert
 forge status
 forge publish-screenshot <file> [<file> ...]
+forge --help  # list all commands
 ```
 
 Internal `watch`, `reap`, and `reconcile` commands support tmux hooks and
