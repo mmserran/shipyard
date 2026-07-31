@@ -166,6 +166,14 @@ watcher_run() {
         run_status="$(sed -n 's/^  status: *"\{0,1\}\([^"]*\)"\{0,1\}$/\1/p' <<<"$output" | head -n 1)"
         pr="$(sed -n 's/^  pr: *"\([^"]*\)".*/\1/p' <<<"$output" | head -n 1)"
 
+        # Attach-pane visibility tracks whether a run is actually active, not
+        # which badge wins precedence -- a run can still be going while the
+        # window shows attention (stale manual flag) or published (PR already
+        # opened mid-run), and the TUI should stay reachable either way.
+        if [[ "$run_status" == "running" ]]; then
+            watcher_ensure_attach_pane "$window_id" "$worktree"
+        fi
+
         if [[ "$manual_state" == "attention" ]]; then
             watcher_apply_state "$window_id" attention "$pr"
         elif [[ "$run_status" == "failed" || "$run_status" == "cancelled" ]]; then
@@ -187,7 +195,6 @@ watcher_run() {
             fi
         elif [[ "$run_status" == "running" ]]; then
             watcher_apply_state "$window_id" validating
-            watcher_ensure_attach_pane "$window_id" "$worktree"
         elif [[ "$manual_state" != "planning" && -n "$manual_state" ]]; then
             watcher_apply_state "$window_id" "$manual_state"
         elif watcher_should_build "$window_id" "$worktree"; then
