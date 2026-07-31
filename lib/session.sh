@@ -81,6 +81,21 @@ shipyard_repo_window() {
         awk '$2 == "repo" {print $1; exit}'
 }
 
+# Numbers only intent windows, in their tmux order. Repository-level windows
+# deliberately have no visible number in the status bar.
+shipyard_refresh_intent_numbers() {
+    local session_name="$1"
+    local window_id
+    local number=0
+
+    while IFS= read -r window_id; do
+        [[ -n "$window_id" ]] || continue
+        number=$((number + 1))
+        tmux set-option -w -t "$window_id" @shipyard_intent_number "$number"
+    done < <(tmux list-windows -t "=$session_name" \
+        -F '#{?@shipyard_worktree,#{window_id},}' 2>/dev/null)
+}
+
 # Creates the decorative repo-named Yazi window if missing and keeps it
 # leftmost so it replaces the old status-left project label. Callers must
 # already have verified that yazi is on PATH and that the session exists.
@@ -151,6 +166,9 @@ shipyard_open() {
         fi
         tmux set-option -w -t "$command_window_id" @shipyard_role command
     fi
+
+    shipyard_refresh_window_context "$command_window_id"
+    shipyard_refresh_intent_numbers "$session_name"
 
     window_id="$repo_window_id"
     if [[ -n "${TMUX:-}" ]]; then
@@ -334,6 +352,7 @@ shipyard_new() {
     tmux set-option -w -t "$window_id" @pipeline_manual_state planning
     tmux set-option -w -t "$window_id" @pipeline_state planning
     tmux set-option -w -t "$window_id" @pipeline_badge "$(pipeline_badge_for planning)"
+    shipyard_refresh_intent_numbers "$session_name"
     watcher_command="$(shipyard_watcher_command "$window_id" "$worktree")"
     tmux run-shell -b "$watcher_command"
 
@@ -353,15 +372,13 @@ shipyard_new() {
 # Treehouse is about to reset and potentially hand to a different unit of
 # work out from under it.
 #
-# On a command window there is no lease to return, so it just closes the
-# window and hands the client to another open Shipyard repo instead. The repo
-# window is persistent infrastructure and cannot be closed through forge.
+# On a command window there is no lease of its own. It acts as the repository
+# close-all control: every intent lease is safely returned, then the whole
+# session (including the command and Yazi windows) is closed.
 shipyard_close() {
     local window_id
     local worktree
     local lease_id
-    local status_output
-    local run_output
     local role
 
     window_id="$(tmux display-message -p -t "${TMUX_PANE:-}" '#{window_id}' 2>/dev/null)"
@@ -386,6 +403,25 @@ shipyard_close() {
         return 1
     fi
 
+    shipyard_close_intent_window "$window_id"
+}
+
+shipyard_close_intent_window() {
+    local window_id="$1"
+    local worktree
+    local lease_id
+    local status_output
+    local run_output
+    local session_name
+
+    worktree="$(tmux show-options -wqv -t "$window_id" @shipyard_worktree 2>/dev/null)"
+    lease_id="$(tmux show-options -wqv -t "$window_id" @shipyard_lease_id 2>/dev/null)"
+    if [[ -z "$worktree" || -z "$lease_id" ]]; then
+        printf 'forge: not a leased intent window\n' >&2
+        return 1
+    fi
+    session_name="$(tmux display-message -p -t "$window_id" '#{session_name}' 2>/dev/null)"
+
     if command -v no-mistakes >/dev/null 2>&1; then
         run_output="$(cd "$worktree" && no-mistakes axi status 2>/dev/null)" || run_output=""
         # No outcome: line means the run hasn't reached a terminal state
@@ -409,6 +445,9 @@ shipyard_close() {
 
     shipyard_forget_lease "$window_id"
     tmux kill-window -t "$window_id"
+    if tmux has-session -t "=$session_name" 2>/dev/null; then
+        shipyard_refresh_intent_numbers "$session_name"
+    fi
 }
 
 # Finds another open repo's Yazi window (or its command window for compatibility
@@ -432,24 +471,32 @@ shipyard_next_repo_window() {
     done < <(tmux list-sessions -F '#{session_name}' 2>/dev/null)
 }
 
-# Closes a repo's command window. There's no lease to return here, so unlike
-# shipyard_close's intent-window path this never fails the close: it just
-# moves the client to another open shipyard repo's command window, if any,
-# before closing -- and otherwise leaves tmux to do what it always does when
-# a session's last window goes away.
+# Closes every intent in the command window's repository, then removes its
+# repository-level windows by killing the session. Each intent is closed via
+# the same guarded lease-return path as a direct `forge close`.
 shipyard_close_command_window() {
     local window_id="$1"
     local session_name
     local next_window
+    local intent_window
 
     session_name="$(tmux display-message -p -t "$window_id" '#{session_name}' 2>/dev/null)"
     next_window="$(shipyard_next_repo_window "$session_name")"
+
+    while IFS= read -r intent_window; do
+        [[ -n "$intent_window" ]] || continue
+        if ! shipyard_close_intent_window "$intent_window"; then
+            printf 'forge: failed to close all intent windows; repository session remains open\n' >&2
+            return 1
+        fi
+    done < <(tmux list-windows -t "=$session_name" \
+        -F '#{?@shipyard_worktree,#{window_id},}' 2>/dev/null)
 
     if [[ -n "$next_window" && -n "${TMUX:-}" ]]; then
         tmux switch-client -t "$next_window"
     fi
 
-    tmux kill-window -t "$window_id"
+    tmux kill-session -t "=$session_name"
 }
 
 shipyard_reap() {
