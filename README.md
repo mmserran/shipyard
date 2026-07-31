@@ -151,7 +151,7 @@ Every pane border independently shows its current `repository  branch`. Promp
 hooks and the window watcher refresh this context, so a pane that enters another
 repository remains accurately labeled without changing the session identity.
 
-A ✏️ next to a window's title means its worktree currently has uncommitted
+A window's title turns red when its worktree currently has uncommitted
 changes. It's orthogonal to the pipeline badge — a window can be `building`
 and dirty at once, that's normal — and purely informational: closing that
 window right now would need a decision, one way or another.
