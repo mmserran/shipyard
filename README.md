@@ -91,7 +91,6 @@ unleased windows are rejected.
 ## Open a project's repo windows
 
 ```bash
-forge open
 forge open ~/projects/my-app
 ```
 
@@ -119,14 +118,17 @@ forge open portfolio/mserrano.net-web-services
 ## Restore after a reboot
 
 ```bash
-forge restore
+forge open
 ```
 
-Shipyard stores a durable manifest for every active intent. After a reboot or
-other tmux server loss, `forge restore` verifies that each exact Treehouse lease
-is still active, recreates the repository sessions and standard two-pane intent
-windows, restarts their watchers, and attaches to the recovered sessions. It
-never silently substitutes a new lease when the original one is gone.
+`forge open` with no path doesn't open a project — it restores every leased
+intent window instead. Shipyard stores a durable manifest for every active
+intent. After a reboot or other tmux server loss, this verifies that each
+exact Treehouse lease is still active, recreates the repository sessions and
+standard two-pane intent windows, restarts their watchers, and attaches to the
+recovered sessions. It never silently substitutes a new lease when the
+original one is gone, and it never silently opens the current directory as a
+project either — pass a path (even `.`) for that.
 The watcher automatically backfills manifests for intent windows created by an
 older Shipyard version, so they become recoverable after upgrading too.
 
@@ -224,8 +226,8 @@ because it does not repair PR comments or non-image local links.
 ```text
 forge             # attach to a pre-existing shipyard window, if one is open
 forge open [path]  # open/create the repo's Yazi and command windows
+forge open        # no path: restore active intent windows after a reboot
 forge new <intent>
-forge restore       # rebuild active intent windows after a reboot
 forge close  # close one intent, or the whole repo from its command window
 forge build  # manually override the state to building
 forge alert
@@ -243,8 +245,9 @@ automatic state management.
 - `shell/bash.sh` sets up a Shipyard shell, including the exit() guard that
   protects an intent window's lease from an accidental close.
 - `lib/session.sh` creates project sessions, leases worktrees, restores
-  intent windows after tmux loss (`forge restore`), force-closes windows
-  (`forge close`), and records lease cleanup plus durable intent manifests.
+  intent windows after tmux loss (`forge open` with no path), force-closes
+  windows (`forge close`), and records lease cleanup plus durable intent
+  manifests.
 - `lib/context.sh` maintains pane repository and branch context.
 - `lib/pipeline.sh` maps effective states to tmux badges.
 - `lib/watcher.sh` derives validation and PR states, snapshots the observed
