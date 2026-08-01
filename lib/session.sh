@@ -299,7 +299,13 @@ shipyard_lease_is_current() {
     local lease_id="$1"
     local status_json
 
-    status_json="$(treehouse status --json 2>/dev/null)" || return 1
+    # Exit codes are not interchangeable: 1 means the probe succeeded and
+    # proved the lease absent (safe to forget); 2 means the probe itself
+    # failed (daemon down, transient error) and the lease's fate is unknown.
+    # Callers that wipe durable state on "not current" must treat these
+    # differently, or a transient treehouse failure during bare `forge open`
+    # (restore) would permanently destroy the manifests it exists to preserve.
+    status_json="$(treehouse status --json 2>/dev/null)" || return 2
     grep -Fq '"lease_id":"'"$lease_id"'"' <<<"$status_json"
 }
 
@@ -326,7 +332,15 @@ shipyard_restore_intent() {
     [[ "$base_head" == "-" ]] && base_head=""
     [[ "$base_branch" == "-" ]] && base_branch=""
     [[ "$agent" == "-" ]] && agent=""
-    if [[ ! -d "$worktree" ]] || ! shipyard_lease_is_current "$lease_id"; then
+
+    local lease_status=0
+    shipyard_lease_is_current "$lease_id" || lease_status=$?
+    if [[ "$lease_status" -eq 2 ]]; then
+        printf 'forge: cannot restore %s: could not confirm Treehouse lease %s status; leaving manifest for a later retry\n' \
+            "$intent" "$lease_id" >&2
+        return 1
+    fi
+    if [[ ! -d "$worktree" || "$lease_status" -eq 1 ]]; then
         printf 'forge: cannot restore %s: Treehouse lease %s is no longer active at %s\n' \
             "$intent" "$lease_id" "$worktree" >&2
         shipyard_forget_intent "$lease_id"
@@ -371,6 +385,7 @@ shipyard_restore_intent() {
 
 shipyard_restore() {
     local state_home intent_file session_name target_window="" result=0
+    local found_intent=0
 
     state_home="$(shipyard_state_home)"
     for dependency in tmux treehouse yazi; do
@@ -382,6 +397,7 @@ shipyard_restore() {
     mkdir -p "$state_home/intents"
     for intent_file in "$state_home"/intents/*.intent; do
         [[ -e "$intent_file" ]] || continue
+        found_intent=1
         if ! shipyard_restore_intent "$intent_file"; then
             result=1
         fi
@@ -394,7 +410,10 @@ shipyard_restore() {
         [[ -n "$target_window" ]] || target_window="$(shipyard_command_window "$session_name")"
         [[ -n "$target_window" ]] || target_window="$(shipyard_repo_window "$session_name")"
     done < <(tmux list-sessions -F '#{?@shipyard_project_root,#{session_name},}' 2>/dev/null)
-    [[ -n "$target_window" ]] || return "$result"
+    if [[ -z "$target_window" ]]; then
+        [[ "$found_intent" -eq 1 ]] || printf 'forge: no prior sessions; pass a path to open a project (forge open <path>)\n'
+        return "$result"
+    fi
     if [[ -n "${TMUX:-}" ]]; then
         tmux switch-client -t "$target_window"
     else
@@ -787,9 +806,9 @@ shipyard_reconcile() {
         [[ -e "$lease_file" ]] || continue
         IFS=$'\t' read -r window_id _ lease_id _ < "$lease_file"
         # Intent remaining means no reap has claimed this window yet
-        # (reboot / tmux loss). Preserve for `forge restore`. After a normal
-        # window-unlinked reap, the intent is cleared even if Treehouse
-        # declines, so reconcile can keep retrying the lease.
+        # (reboot / tmux loss). Preserve for bare `forge open` (restore).
+        # After a normal window-unlinked reap, the intent is cleared even if
+        # Treehouse declines, so reconcile can keep retrying the lease.
         [[ -f "$(shipyard_intent_file "$lease_id")" ]] && continue
         shipyard_reap "$window_id" || true
     done

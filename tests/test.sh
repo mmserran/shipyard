@@ -1407,6 +1407,27 @@ if [[ -e "$(shipyard_intent_file lease-dead)" || -e "$(shipyard_state_home)/wind
 fi
 printf 'ok - restore forgets dead intents and stale lease records\n'
 
+treehouse() {
+    if [[ "$1" == "status" && "$2" == "--json" ]]; then
+        return 1
+    fi
+}
+shipyard_record_intent "lease-unknown" "$test_tmp" "unknown-restore" "unclear intent" \
+    "$test_tmp" "shipyard:unknown-restore:unclear intent" "base" "development"
+shipyard_record_lease "@unknown-restore" "$test_tmp" "lease-unknown" \
+    "shipyard:unknown-restore:unclear intent"
+if shipyard_restore_intent "$(shipyard_intent_file lease-unknown)" 2>/dev/null; then
+    printf 'not ok - restore does not proceed when the lease probe itself fails\n' >&2
+    exit 1
+fi
+printf 'ok - restore does not proceed when the lease probe itself fails\n'
+if [[ ! -e "$(shipyard_intent_file lease-unknown)" || ! -e "$(shipyard_state_home)/windows/lease-unknown.lease" ]]; then
+    printf 'not ok - restore preserves manifest and lease record when the probe fails transiently\n' >&2
+    exit 1
+fi
+printf 'ok - restore preserves manifest and lease record when the probe fails transiently\n'
+rm -f "$(shipyard_intent_file lease-unknown)" "$(shipyard_state_home)/windows/lease-unknown.lease"
+
 tmux new-session -d -s legacy-restore -n legacy -c "$test_tmp"
 legacy_window="$(tmux display-message -p -t legacy-restore '#{window_id}')"
 tmux set-option -t legacy-restore @shipyard_project_root "$test_tmp"
@@ -1430,5 +1451,24 @@ esac
 tmux kill-session -t legacy-restore
 shipyard_forget_lease "$legacy_window"
 shipyard_forget_intent lease-legacy
+
+tmux kill-server 2>/dev/null || true
+rm -f "$(shipyard_state_home)"/intents/*.intent 2>/dev/null || true
+restore_empty_output="$(shipyard_restore)"
+restore_empty_status=$?
+if [[ "$restore_empty_status" -ne 0 ]]; then
+    printf 'not ok - forge open with nothing to restore still exits successfully\n' >&2
+    exit 1
+fi
+printf 'ok - forge open with nothing to restore still exits successfully\n'
+case "$restore_empty_output" in
+    *"no prior sessions"*)
+        printf 'ok - forge open with nothing to restore explains itself instead of exiting silently\n'
+        ;;
+    *)
+        printf 'not ok - forge open with nothing to restore explains itself instead of exiting silently\n' >&2
+        exit 1
+        ;;
+esac
 
 printf 'all tests passed\n'
