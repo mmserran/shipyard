@@ -303,8 +303,8 @@ shipyard_lease_is_current() {
     # proved the lease absent (safe to forget); 2 means the probe itself
     # failed (daemon down, transient error) and the lease's fate is unknown.
     # Callers that wipe durable state on "not current" must treat these
-    # differently, or a transient treehouse failure during forge restore
-    # would permanently destroy the manifests it exists to preserve.
+    # differently, or a transient treehouse failure during bare `forge open`
+    # (restore) would permanently destroy the manifests it exists to preserve.
     status_json="$(treehouse status --json 2>/dev/null)" || return 2
     grep -Fq '"lease_id":"'"$lease_id"'"' <<<"$status_json"
 }
@@ -806,9 +806,9 @@ shipyard_reconcile() {
         [[ -e "$lease_file" ]] || continue
         IFS=$'\t' read -r window_id _ lease_id _ < "$lease_file"
         # Intent remaining means no reap has claimed this window yet
-        # (reboot / tmux loss). Preserve for `forge restore`. After a normal
-        # window-unlinked reap, the intent is cleared even if Treehouse
-        # declines, so reconcile can keep retrying the lease.
+        # (reboot / tmux loss). Preserve for bare `forge open` (restore).
+        # After a normal window-unlinked reap, the intent is cleared even if
+        # Treehouse declines, so reconcile can keep retrying the lease.
         [[ -f "$(shipyard_intent_file "$lease_id")" ]] && continue
         shipyard_reap "$window_id" || true
     done

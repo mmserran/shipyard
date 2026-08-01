@@ -31,7 +31,7 @@ Usage:
   forge open [path]   Open (or create) a project's tmux session, Yazi repo
                        window, and command window. With no path, instead
                        restores every leased intent window after a tmux
-                       server loss (see below)
+                       server loss
   forge new <intent>  Create an intent window in a leased Treehouse worktree
   forge close         Force-close this window: abort any active no-mistakes
                        run for it, discard uncommitted changes, and return
