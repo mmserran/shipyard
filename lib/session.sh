@@ -329,6 +329,8 @@ shipyard_restore_intent() {
     if [[ ! -d "$worktree" ]] || ! shipyard_lease_is_current "$lease_id"; then
         printf 'forge: cannot restore %s: Treehouse lease %s is no longer active at %s\n' \
             "$intent" "$lease_id" "$worktree" >&2
+        shipyard_forget_intent "$lease_id"
+        rm -f "$(shipyard_state_home)/windows/${lease_id}.lease"
         return 1
     fi
 
@@ -423,11 +425,15 @@ shipyard_forget_lease() {
     local window_id="$1"
     local lease_file
     local recorded_window_id
+    local lease_id
 
     for lease_file in "$(shipyard_state_home)/windows"/*.lease; do
         [[ -e "$lease_file" ]] || continue
-        IFS=$'\t' read -r recorded_window_id _ < "$lease_file"
-        [[ "$recorded_window_id" == "$window_id" ]] && rm -f "$lease_file"
+        IFS=$'\t' read -r recorded_window_id _ lease_id _ < "$lease_file"
+        if [[ "$recorded_window_id" == "$window_id" ]]; then
+            rm -f "$lease_file"
+            shipyard_forget_intent "$lease_id"
+        fi
     done
     return 0
 }
@@ -762,6 +768,7 @@ shipyard_reap() {
             rm -f "$lease_file"
             shipyard_forget_intent "$lease_id"
         else
+            shipyard_forget_intent "$lease_id"
             result=1
         fi
     done
@@ -779,10 +786,10 @@ shipyard_reconcile() {
     for lease_file in "$state_home"/windows/*.lease; do
         [[ -e "$lease_file" ]] || continue
         IFS=$'\t' read -r window_id _ lease_id _ < "$lease_file"
-        # A durable active-intent manifest means a missing window may be the
-        # result of a reboot. Preserve it for `forge restore`; the immediate
-        # window-unlinked hook still calls shipyard_reap directly for normal
-        # user-driven closes.
+        # Intent remaining means no reap has claimed this window yet
+        # (reboot / tmux loss). Preserve for `forge restore`. After a normal
+        # window-unlinked reap, the intent is cleared even if Treehouse
+        # declines, so reconcile can keep retrying the lease.
         [[ -f "$(shipyard_intent_file "$lease_id")" ]] && continue
         shipyard_reap "$window_id" || true
     done

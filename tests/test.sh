@@ -465,6 +465,8 @@ treehouse() {
     esac
 }
 shipyard_record_lease "@aborted-test" "/tmp/aborted-worktree" "lease-aborted" "holder"
+shipyard_record_intent "lease-aborted" "/projects/app" "app" "aborted intent" \
+    "/tmp/aborted-worktree" "holder" "abc" "development"
 if shipyard_reap "@aborted-test"; then
     printf 'not ok - reap does not report success when treehouse return is declined\n' >&2
     exit 1
@@ -476,6 +478,11 @@ else
     printf 'not ok - reap keeps the lease record when the return is declined\n' >&2
     exit 1
 fi
+if [[ -e "$(shipyard_intent_file lease-aborted)" ]]; then
+    printf 'not ok - reap clears the intent after a declined reclaim so reconcile can retry\n' >&2
+    exit 1
+fi
+printf 'ok - reap clears the intent after a declined reclaim so reconcile can retry\n'
 rm -f "$(shipyard_state_home)/windows/lease-aborted.lease"
 
 # If the lease was already returned by some other path (e.g. a manual
@@ -1379,7 +1386,26 @@ assert_equal "1" \
     "restore tags the main pane for watcher and agent snapshots"
 tmux kill-session -t restore-test
 shipyard_forget_lease "$restored_window"
-shipyard_forget_intent lease-restore
+if [[ -e "$(shipyard_intent_file lease-restore)" ]]; then
+    printf 'not ok - forgetting a lease also clears its paired intent manifest\n' >&2
+    exit 1
+fi
+printf 'ok - forgetting a lease also clears its paired intent manifest\n'
+
+shipyard_record_intent "lease-dead" "$test_tmp" "dead-restore" "gone intent" \
+    "/tmp/shipyard-missing-worktree-$$" "shipyard:dead-restore:gone intent" "base" "development"
+shipyard_record_lease "@dead-restore" "/tmp/shipyard-missing-worktree-$$" "lease-dead" \
+    "shipyard:dead-restore:gone intent"
+if shipyard_restore_intent "$(shipyard_intent_file lease-dead)" 2>/dev/null; then
+    printf 'not ok - restore rejects a lease that is no longer restorable\n' >&2
+    exit 1
+fi
+printf 'ok - restore rejects a lease that is no longer restorable\n'
+if [[ -e "$(shipyard_intent_file lease-dead)" || -e "$(shipyard_state_home)/windows/lease-dead.lease" ]]; then
+    printf 'not ok - restore forgets dead intents and stale lease records\n' >&2
+    exit 1
+fi
+printf 'ok - restore forgets dead intents and stale lease records\n'
 
 tmux new-session -d -s legacy-restore -n legacy -c "$test_tmp"
 legacy_window="$(tmux display-message -p -t legacy-restore '#{window_id}')"
