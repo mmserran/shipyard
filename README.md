@@ -43,7 +43,8 @@ Shipyard:
    secondary tool, with focus on the top pane;
 5. ensures the leftmost repo-named Yazi window exists so the status bar keeps
    a clickable repository label even before `forge open`;
-6. records enough lease identity for safe automatic cleanup;
+6. records lease identity for cleanup and a durable intent manifest for
+   restore after tmux loss;
 7. starts a state watcher; and
 8. opens an ordinary shell without starting an agent.
 
@@ -106,6 +107,15 @@ Repeated calls reuse both windows instead of creating duplicates. If the Yazi
 window was manually killed through tmux, the next `forge open` (or `forge new`)
 recreates it at the left of the window list.
 
+If the session doesn't exist yet, `forge open` creates it, so it also works
+as a way to open a new tmux session for a repository you haven't started
+working in yet:
+
+```bash
+forge open ~/.config/shipyard
+forge open portfolio/mserrano.net-web-services
+```
+
 ## Restore after a reboot
 
 ```bash
@@ -125,15 +135,6 @@ pane, the recovered shell prints that agent's safe resume command. Shipyard does
 not scrape conversation identifiers or automatically execute an agent: use the
 agent's picker or provide its known ID, for example `codex resume`,
 `claude --continue`, or `cursor-agent --resume [thread-id]`.
-
-If the session doesn't exist yet, `forge open` creates it, so it also works
-as a way to open a new tmux session for a repository you haven't started
-working in yet:
-
-```bash
-forge open ~/.config/shipyard
-forge open portfolio/mserrano.net-web-services
-```
 
 ## Workflow states
 
@@ -241,12 +242,14 @@ automatic state management.
 - `bin/forge` routes the CLI.
 - `shell/bash.sh` sets up a Shipyard shell, including the exit() guard that
   protects an intent window's lease from an accidental close.
-- `lib/session.sh` creates project sessions, leases worktrees, force-closes
-  windows (`forge close`), and records cleanup metadata.
+- `lib/session.sh` creates project sessions, leases worktrees, restores
+  intent windows after tmux loss (`forge restore`), force-closes windows
+  (`forge close`), and records lease cleanup plus durable intent manifests.
 - `lib/context.sh` maintains pane repository and branch context.
 - `lib/pipeline.sh` maps effective states to tmux badges.
-- `lib/watcher.sh` derives validation and PR states, and flags a worktree's
-  uncommitted-changes status for the status bar.
+- `lib/watcher.sh` derives validation and PR states, snapshots the observed
+  agent for restore hints, and flags a worktree's uncommitted-changes status
+  for the status bar.
 - `lib/screenshot.sh` publishes PR-safe visual evidence and self-heals local
   screenshot links left in a PR body.
 - `skills/publish-screenshots/SKILL.md` teaches agents when local visual
