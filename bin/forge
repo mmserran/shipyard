@@ -32,6 +32,7 @@ Usage:
                        window, and command window; defaults to the current
                        directory
   forge new <intent>  Create an intent window in a leased Treehouse worktree
+  forge restore       Restore leased intent windows after a tmux server loss
   forge close         Force-close this window: abort any active no-mistakes
                        run for it, discard uncommitted changes, and return
                        the Treehouse lease. On a repo's command window,
@@ -66,6 +67,10 @@ main() {
         new)
             shift
             shipyard_new "$@"
+            ;;
+
+        restore)
+            shipyard_restore
             ;;
 
         close)

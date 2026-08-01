@@ -152,6 +152,7 @@ watcher_run() {
 
     while watcher_window_exists "$window_id"; do
         shipyard_refresh_window_context "$window_id"
+        shipyard_snapshot_agent "$window_id"
         watcher_apply_dirty "$window_id" "$worktree"
         manual_state="$(tmux show-options -wqv -t "$window_id" @pipeline_manual_state)"
         output=""
