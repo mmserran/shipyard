@@ -715,7 +715,8 @@ shipyard_record_lease "%unrelated" "$exit_worktree" "zz-unrelated" "holder"
 
 export test_socket test_tmp returned_lease_file no_mistakes_active no_mistakes_aborted_file
 export -f tmux treehouse no-mistakes shipyard_close shipyard_close_intent_window \
-    shipyard_refresh_intent_numbers shipyard_forget_lease shipyard_state_home
+    shipyard_refresh_intent_numbers shipyard_forget_lease shipyard_forget_intent \
+    shipyard_intent_file shipyard_state_home
 if TMUX_PANE="$close_pane" bash -e -c 'shipyard_close' 2>/dev/null; then
     printf 'ok - forge close returns the lease and closes a clean window\n'
 else
@@ -1339,5 +1340,69 @@ screenshot_publish() {
 screenshot_autofix_pr_body "$autofix_worktree" "42"
 assert_equal "0" "$autofix_edit_called" \
     "autofix leaves local links intact when publication fails"
+
+shipyard_record_intent "lease-manifest" "/projects/app" "app" "restore work" \
+    "/trees/app-2" "shipyard:app:restore work" "abc123" "development" "cursor-agent"
+assert_equal \
+    $'lease-manifest\t/projects/app\tapp\trestore work\t/trees/app-2\tshipyard:app:restore work\tabc123\tdevelopment\tcursor-agent' \
+    "$(cat "$(shipyard_intent_file lease-manifest)")" \
+    "intent manifests preserve the state needed to rebuild a window"
+assert_equal "codex resume" "$(shipyard_resume_hint codex)" \
+    "Codex restore uses its session picker"
+assert_equal "claude --continue" "$(shipyard_resume_hint claude)" \
+    "Claude restore continues the worktree's last conversation"
+assert_equal "cursor-agent --resume" "$(shipyard_resume_hint cursor-agent)" \
+    "Cursor restore uses its thread picker"
+shipyard_forget_intent lease-manifest
+if [[ -e "$(shipyard_intent_file lease-manifest)" ]]; then
+    printf 'not ok - forgetting an intent removes its durable manifest\n' >&2
+    exit 1
+fi
+printf 'ok - forgetting an intent removes its durable manifest\n'
+
+treehouse() {
+    if [[ "$1" == "status" && "$2" == "--json" ]]; then
+        printf '[{"path":"%s","status":"leased","lease_id":"lease-restore"}]\n' "$test_tmp"
+    fi
+}
+shipyard_record_intent "lease-restore" "$test_tmp" "restore-test" "recovered intent" \
+    "$test_tmp" "shipyard:restore-test:recovered intent" "base123" "development" "cursor-agent"
+shipyard_restore_intent "$(shipyard_intent_file lease-restore)"
+restored_window="$(tmux list-windows -t restore-test -F '#{window_id}' | head -n 1)"
+assert_equal "lease-restore" \
+    "$(tmux show-options -wqv -t "$restored_window" @shipyard_lease_id)" \
+    "restore recreates a window for the exact active lease"
+assert_equal "2" "$(tmux list-panes -t "$restored_window" | wc -l)" \
+    "restore recreates the standard two-pane layout"
+assert_equal "1" \
+    "$(tmux list-panes -t "$restored_window" -F '#{@shipyard_main_pane}' | grep -c '^1$')" \
+    "restore tags the main pane for watcher and agent snapshots"
+tmux kill-session -t restore-test
+shipyard_forget_lease "$restored_window"
+shipyard_forget_intent lease-restore
+
+tmux new-session -d -s legacy-restore -n legacy -c "$test_tmp"
+legacy_window="$(tmux display-message -p -t legacy-restore '#{window_id}')"
+tmux set-option -t legacy-restore @shipyard_project_root "$test_tmp"
+tmux set-option -w -t "$legacy_window" @shipyard_intent "legacy intent"
+tmux set-option -w -t "$legacy_window" @shipyard_lease_id "lease-legacy"
+tmux set-option -w -t "$legacy_window" @shipyard_base_head "legacy-base"
+tmux set-option -w -t "$legacy_window" @shipyard_base_branch "development"
+shipyard_record_lease "$legacy_window" "$test_tmp" "lease-legacy" "shipyard:legacy-restore:legacy intent"
+main_pane_list='1|codex'
+shipyard_snapshot_agent "$legacy_window"
+unset main_pane_list
+case "$(cat "$(shipyard_intent_file lease-legacy)")" in
+    *$'\tlegacy intent\t'*$'\tcodex')
+        printf 'ok - watcher backfills manifests and agent kind for legacy windows\n'
+        ;;
+    *)
+        printf 'not ok - watcher backfills manifests and agent kind for legacy windows\n' >&2
+        exit 1
+        ;;
+esac
+tmux kill-session -t legacy-restore
+shipyard_forget_lease "$legacy_window"
+shipyard_forget_intent lease-legacy
 
 printf 'all tests passed\n'

@@ -218,6 +218,189 @@ shipyard_state_home() {
     printf '%s/shipyard' "${XDG_STATE_HOME:-$HOME/.local/state}"
 }
 
+shipyard_intent_file() {
+    local lease_id="$1"
+    printf '%s/intents/%s.intent\n' "$(shipyard_state_home)" "$lease_id"
+}
+
+# Durable intent metadata is separate from tmux's ephemeral IDs. The file is
+# replaced atomically so an abrupt power loss leaves either the old complete
+# snapshot or the new one, never a partially-written manifest.
+shipyard_record_intent() {
+    local lease_id="$1"
+    local project_root="$2"
+    local session_name="$3"
+    local intent="$4"
+    local worktree="$5"
+    local lease_holder="$6"
+    local base_head="${7:--}"
+    local base_branch="${8:--}"
+    local agent="${9:--}"
+    local state_home
+    local intent_file
+    local temporary_file
+
+    state_home="$(shipyard_state_home)"
+    mkdir -p "$state_home/intents"
+    intent_file="$(shipyard_intent_file "$lease_id")"
+    temporary_file="${intent_file}.tmp.$$"
+    printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
+        "$lease_id" "$project_root" "$session_name" "$intent" "$worktree" \
+        "$lease_holder" "$base_head" "$base_branch" "$agent" > "$temporary_file"
+    mv -f "$temporary_file" "$intent_file"
+}
+
+shipyard_forget_intent() {
+    local lease_id="$1"
+    rm -f "$(shipyard_intent_file "$lease_id")"
+}
+
+shipyard_snapshot_agent() {
+    local window_id="$1"
+    local lease_id
+    local intent_file
+    local fields
+    local agent
+    local lease_file recorded_window_id worktree recorded_lease_id lease_holder
+    local project_root session_name intent base_head base_branch
+
+    lease_id="$(tmux show-options -wqv -t "$window_id" @shipyard_lease_id 2>/dev/null)"
+    [[ -n "$lease_id" ]] || return 0
+    intent_file="$(shipyard_intent_file "$lease_id")"
+    if [[ ! -f "$intent_file" ]]; then
+        lease_file="$(shipyard_state_home)/windows/${lease_id}.lease"
+        [[ -f "$lease_file" ]] || return 0
+        IFS=$'\t' read -r recorded_window_id worktree recorded_lease_id lease_holder < "$lease_file"
+        [[ "$recorded_window_id" == "$window_id" && "$recorded_lease_id" == "$lease_id" ]] || return 0
+        session_name="$(tmux display-message -p -t "$window_id" '#{session_name}' 2>/dev/null)"
+        project_root="$(tmux show-options -qv -t "$session_name" @shipyard_project_root 2>/dev/null)"
+        intent="$(tmux show-options -wqv -t "$window_id" @shipyard_intent 2>/dev/null)"
+        base_head="$(tmux show-options -wqv -t "$window_id" @shipyard_base_head 2>/dev/null)"
+        base_branch="$(tmux show-options -wqv -t "$window_id" @shipyard_base_branch 2>/dev/null)"
+        [[ -n "$project_root" && -n "$session_name" && -n "$intent" && -n "$worktree" ]] || return 0
+        shipyard_record_intent "$lease_id" "$project_root" "$session_name" "$intent" \
+            "$worktree" "$lease_holder" "$base_head" "$base_branch"
+    fi
+    agent="$(tmux list-panes -t "$window_id" \
+        -F '#{@shipyard_main_pane}|#{pane_current_command}' 2>/dev/null |
+        awk -F '|' '$1 == "1" { print $2; exit }')"
+    case "$agent" in
+        codex|claude|cursor-agent) ;;
+        *) return 0 ;;
+    esac
+    IFS=$'\t' read -r -a fields < "$intent_file"
+    [[ "${fields[8]:-}" == "$agent" ]] && return 0
+    shipyard_record_intent "${fields[0]}" "${fields[1]}" "${fields[2]}" \
+        "${fields[3]}" "${fields[4]}" "${fields[5]}" "${fields[6]}" \
+        "${fields[7]}" "$agent"
+}
+
+shipyard_lease_is_current() {
+    local lease_id="$1"
+    local status_json
+
+    status_json="$(treehouse status --json 2>/dev/null)" || return 1
+    grep -Fq '"lease_id":"'"$lease_id"'"' <<<"$status_json"
+}
+
+shipyard_resume_hint() {
+    case "$1" in
+        codex) printf 'codex resume\n' ;;
+        claude) printf 'claude --continue\n' ;;
+        cursor-agent) printf 'cursor-agent --resume\n' ;;
+        *) printf 'codex resume  # or: claude --continue / cursor-agent --resume [thread-id]\n' ;;
+    esac
+}
+
+shipyard_restore_intent() {
+    local intent_file="$1"
+    local lease_id project_root session_name intent worktree lease_holder base_head base_branch agent
+    local window_id top_pane_id watcher_command hint
+
+    IFS=$'\t' read -r lease_id project_root session_name intent worktree lease_holder \
+        base_head base_branch agent < "$intent_file"
+    [[ -n "$lease_id" && -n "$project_root" && -n "$session_name" && -n "$intent" && -n "$worktree" ]] || {
+        printf 'forge: invalid intent manifest: %s\n' "$intent_file" >&2
+        return 1
+    }
+    [[ "$base_head" == "-" ]] && base_head=""
+    [[ "$base_branch" == "-" ]] && base_branch=""
+    [[ "$agent" == "-" ]] && agent=""
+    if [[ ! -d "$worktree" ]] || ! shipyard_lease_is_current "$lease_id"; then
+        printf 'forge: cannot restore %s: Treehouse lease %s is no longer active at %s\n' \
+            "$intent" "$lease_id" "$worktree" >&2
+        return 1
+    fi
+
+    if ! tmux has-session -t "=$session_name" 2>/dev/null; then
+        window_id="$(tmux new-session -d -P -F '#{window_id}' \
+            -s "$session_name" -n "$intent" -c "$worktree")" || return
+        tmux set-option -t "$session_name" @shipyard_project_root "$project_root"
+    else
+        while IFS= read -r window_id; do
+            [[ -n "$window_id" ]] || continue
+            if [[ "$(tmux show-options -wqv -t "$window_id" @shipyard_lease_id)" == "$lease_id" ]]; then
+                return 0
+            fi
+        done < <(tmux list-windows -t "=$session_name" -F '#{window_id}')
+        window_id="$(tmux new-window -d -P -F '#{window_id}' \
+            -t "=$session_name:" -n "$intent" -c "$worktree")" || return
+    fi
+
+    top_pane_id="$(tmux display-message -p -t "$window_id" '#{pane_id}')"
+    tmux set-option -p -t "$top_pane_id" @shipyard_main_pane 1
+    tmux split-window -v -p 25 -t "$window_id" -c "$worktree"
+    tmux select-pane -t "$top_pane_id"
+    tmux set-option -w -t "$window_id" @shipyard_intent "$intent"
+    tmux set-option -w -t "$window_id" @shipyard_worktree "$worktree"
+    tmux set-option -w -t "$window_id" @shipyard_lease_id "$lease_id"
+    tmux set-option -w -t "$window_id" @shipyard_base_head "$base_head"
+    tmux set-option -w -t "$window_id" @shipyard_base_branch "$base_branch"
+    tmux set-option -w -t "$window_id" @pipeline_manual_state planning
+    tmux set-option -w -t "$window_id" @pipeline_state planning
+    tmux set-option -w -t "$window_id" @pipeline_badge "$(pipeline_badge_for planning)"
+    shipyard_record_lease "$window_id" "$worktree" "$lease_id" "$lease_holder"
+    watcher_command="$(shipyard_watcher_command "$window_id" "$worktree")"
+    tmux run-shell -b "$watcher_command"
+    hint="$(shipyard_resume_hint "$agent")"
+    tmux send-keys -t "$top_pane_id" \
+        "printf '\\nRestored Shipyard intent. Resume your agent with:\\n  %s\\n\\n' '$hint'" Enter
+}
+
+shipyard_restore() {
+    local state_home intent_file session_name target_window="" result=0
+
+    state_home="$(shipyard_state_home)"
+    for dependency in tmux treehouse yazi; do
+        if ! command -v "$dependency" >/dev/null 2>&1; then
+            printf 'forge: %s is not installed\n' "$dependency" >&2
+            return 1
+        fi
+    done
+    mkdir -p "$state_home/intents"
+    for intent_file in "$state_home"/intents/*.intent; do
+        [[ -e "$intent_file" ]] || continue
+        if ! shipyard_restore_intent "$intent_file"; then
+            result=1
+        fi
+    done
+    while IFS= read -r session_name; do
+        [[ -n "$session_name" ]] || continue
+        shipyard_ensure_repo_window "$session_name" \
+            "$(tmux show-options -qv -t "$session_name" @shipyard_project_root)" >/dev/null || true
+        shipyard_refresh_intent_numbers "$session_name"
+        [[ -n "$target_window" ]] || target_window="$(shipyard_command_window "$session_name")"
+        [[ -n "$target_window" ]] || target_window="$(shipyard_repo_window "$session_name")"
+    done < <(tmux list-sessions -F '#{?@shipyard_project_root,#{session_name},}' 2>/dev/null)
+    [[ -n "$target_window" ]] || return "$result"
+    if [[ -n "${TMUX:-}" ]]; then
+        tmux switch-client -t "$target_window"
+    else
+        tmux attach-session -t "$target_window"
+    fi
+    return "$result"
+}
+
 shipyard_record_lease() {
     local window_id="$1"
     local path="$2"
@@ -349,6 +532,9 @@ shipyard_new() {
     # synthetic window does not exist and safely returns the exact lease.
     pending_window_id="pending-${lease_id}"
     shipyard_record_lease "$pending_window_id" "$worktree" "$lease_id" "$lease_holder"
+    base_head="$(git -C "$worktree" rev-parse HEAD 2>/dev/null || true)"
+    shipyard_record_intent "$lease_id" "$project_root" "$session_name" "$intent" \
+        "$worktree" "$lease_holder" "$base_head" "$base_branch"
 
     if ! tmux has-session -t "=$session_name" 2>/dev/null; then
         if ! window_id="$(tmux new-session -d -P -F '#{window_id}' \
@@ -375,8 +561,6 @@ shipyard_new() {
     tmux set-option -p -t "$top_pane_id" @shipyard_main_pane 1
     tmux split-window -v -p 25 -t "$window_id" -c "$worktree"
     tmux select-pane -t "$top_pane_id"
-
-    base_head="$(git -C "$worktree" rev-parse HEAD 2>/dev/null || true)"
 
     shipyard_record_lease "$window_id" "$worktree" "$lease_id" "$lease_holder"
     tmux set-option -w -t "$window_id" @shipyard_intent "$intent"
@@ -479,6 +663,7 @@ shipyard_close_intent_window() {
     fi
 
     shipyard_forget_lease "$window_id"
+    shipyard_forget_intent "$lease_id"
     tmux kill-window -t "$window_id"
     if tmux has-session -t "=$session_name" 2>/dev/null; then
         shipyard_refresh_intent_numbers "$session_name"
@@ -567,6 +752,7 @@ shipyard_reap() {
         printf '%s\n' "$return_output" >&2
         if [[ "$return_status" -eq 0 && "$return_output" != *Aborted* ]]; then
             rm -f "$lease_file"
+            shipyard_forget_intent "$lease_id"
         elif [[ "$return_output" == *"is not leased"* ]]; then
             # Treehouse already released this lease by some other path (e.g.
             # a manual `treehouse return --force`), so the precondition
@@ -574,6 +760,7 @@ shipyard_reap() {
             # the same as success rather than leaving an orphaned record
             # that every future reconcile fails to clear.
             rm -f "$lease_file"
+            shipyard_forget_intent "$lease_id"
         else
             result=1
         fi
@@ -591,7 +778,12 @@ shipyard_reconcile() {
     mkdir -p "$state_home/windows"
     for lease_file in "$state_home"/windows/*.lease; do
         [[ -e "$lease_file" ]] || continue
-        IFS=$'\t' read -r window_id _ < "$lease_file"
+        IFS=$'\t' read -r window_id _ lease_id _ < "$lease_file"
+        # A durable active-intent manifest means a missing window may be the
+        # result of a reboot. Preserve it for `forge restore`; the immediate
+        # window-unlinked hook still calls shipyard_reap directly for normal
+        # user-driven closes.
+        [[ -f "$(shipyard_intent_file "$lease_id")" ]] && continue
         shipyard_reap "$window_id" || true
     done
 }

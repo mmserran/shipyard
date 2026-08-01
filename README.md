@@ -106,6 +106,26 @@ Repeated calls reuse both windows instead of creating duplicates. If the Yazi
 window was manually killed through tmux, the next `forge open` (or `forge new`)
 recreates it at the left of the window list.
 
+## Restore after a reboot
+
+```bash
+forge restore
+```
+
+Shipyard stores a durable manifest for every active intent. After a reboot or
+other tmux server loss, `forge restore` verifies that each exact Treehouse lease
+is still active, recreates the repository sessions and standard two-pane intent
+windows, restarts their watchers, and attaches to the recovered sessions. It
+never silently substitutes a new lease when the original one is gone.
+The watcher automatically backfills manifests for intent windows created by an
+older Shipyard version, so they become recoverable after upgrading too.
+
+When the watcher previously observed Codex, Claude, or Cursor Agent in the main
+pane, the recovered shell prints that agent's safe resume command. Shipyard does
+not scrape conversation identifiers or automatically execute an agent: use the
+agent's picker or provide its known ID, for example `codex resume`,
+`claude --continue`, or `cursor-agent --resume [thread-id]`.
+
 If the session doesn't exist yet, `forge open` creates it, so it also works
 as a way to open a new tmux session for a repository you haven't started
 working in yet:
@@ -204,6 +224,7 @@ because it does not repair PR comments or non-image local links.
 forge             # attach to a pre-existing shipyard window, if one is open
 forge open [path]  # open/create the repo's Yazi and command windows
 forge new <intent>
+forge restore       # rebuild active intent windows after a reboot
 forge close  # close one intent, or the whole repo from its command window
 forge build  # manually override the state to building
 forge alert
