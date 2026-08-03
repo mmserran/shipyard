@@ -1909,4 +1909,58 @@ tmux kill-session -t "=$pause_intent_steal_session" 2>/dev/null || true
 rm -f "$(shipyard_project_file "$pause_intent_steal_session")"
 shipyard_forget_intent lease-intent-steal
 
+# Session names where one is a prefix of another (demo-repo vs demo-repo-only)
+# must not confuse tmux's default prefix matching during pause/restore.
+rm -f "$(shipyard_state_home)"/intents/*.intent 2>/dev/null || true
+rm -f "$(shipyard_state_home)"/projects/*.project 2>/dev/null || true
+prefix_short_repo="$test_tmp/prefix-short"
+prefix_long_repo="$test_tmp/prefix-short-extra"
+git init -q "$prefix_short_repo"
+git -C "$prefix_short_repo" -c user.email=test@example.com -c user.name=test \
+    commit -q --allow-empty -m initial
+git init -q "$prefix_long_repo"
+git -C "$prefix_long_repo" -c user.email=test@example.com -c user.name=test \
+    commit -q --allow-empty -m initial
+TMUX="test" shipyard_open "$prefix_short_repo"
+TMUX="test" shipyard_open "$prefix_long_repo"
+prefix_short_session="$(shipyard_session_name "$(shipyard_project_root "$prefix_short_repo")")"
+prefix_long_session="$(shipyard_session_name "$(shipyard_project_root "$prefix_long_repo")")"
+case "$prefix_long_session" in
+    "$prefix_short_session"*)
+        ;;
+    *)
+        printf 'not ok - fixture needs a session name that prefixes another\n' >&2
+        exit 1
+        ;;
+esac
+assert_equal "$(shipyard_project_root "$prefix_short_repo")" \
+    "$(shipyard_session_option "$prefix_short_session" @shipyard_project_root)" \
+    "short-name session keeps its own project root beside a longer-named sibling"
+assert_equal "$(shipyard_project_root "$prefix_long_repo")" \
+    "$(shipyard_session_option "$prefix_long_session" @shipyard_project_root)" \
+    "longer-named session keeps its own project root beside its short-name prefix"
+shipyard_pause >/dev/null
+restore_prefix_status=0
+shipyard_restore >/dev/null || restore_prefix_status=$?
+if [[ "$restore_prefix_status" -ne 0 ]]; then
+    printf 'not ok - forge open must restore prefix-colliding paused sessions without failing\n' >&2
+    exit 1
+fi
+assert_equal "$(shipyard_project_root "$prefix_short_repo")" \
+    "$(shipyard_session_option "$prefix_short_session" @shipyard_project_root)" \
+    "restore keeps the short-name session pointed at its own root"
+assert_equal "$(shipyard_project_root "$prefix_long_repo")" \
+    "$(shipyard_session_option "$prefix_long_session" @shipyard_project_root)" \
+    "restore keeps the longer-named session pointed at its own root"
+if [[ -z "$(shipyard_command_window "$prefix_short_session")" ||
+    -z "$(shipyard_repo_window "$prefix_short_session")" ||
+    -z "$(shipyard_command_window "$prefix_long_session")" ||
+    -z "$(shipyard_repo_window "$prefix_long_session")" ]]; then
+    printf 'not ok - forge open must rebuild repo/command windows for both prefix-colliding sessions\n' >&2
+    exit 1
+fi
+printf 'ok - pause/restore keeps prefix-colliding session names distinct\n'
+tmux kill-session -t "=$prefix_short_session" 2>/dev/null || true
+tmux kill-session -t "=$prefix_long_session" 2>/dev/null || true
+
 printf 'all tests passed\n'

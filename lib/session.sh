@@ -45,6 +45,18 @@ shipyard_session_name() {
     printf '%s\n' "$session_name"
 }
 
+# Read a session option by exact session name. `tmux show-options -t name`
+# prefix-matches (so `demo-repo` can return `demo-repo-only`'s value), and
+# `show-options`/`set-option` do not honor the `=` exact-target syntax that
+# `has-session` does. Listing sessions and filtering avoids both traps.
+shipyard_session_option() {
+    local session_name="$1"
+    local option="$2"
+
+    tmux list-sessions -F "#{session_name}"$'\t'"#{${option}}" 2>/dev/null |
+        awk -F '\t' -v session="$session_name" '$1 == session { print $2; exit }'
+}
+
 shipyard_session_for_project() {
     local project_root="$1"
     local session_name
@@ -63,7 +75,7 @@ shipyard_session_for_project() {
 
     while IFS= read -r candidate; do
         [[ -n "$candidate" ]] || continue
-        existing_root="$(tmux show-options -qv -t "$candidate" @shipyard_project_root 2>/dev/null)"
+        existing_root="$(shipyard_session_option "$candidate" @shipyard_project_root 2>/dev/null)"
         if [[ "$existing_root" == "$project_root" ]]; then
             printf '%s\n' "$candidate"
             return
@@ -186,7 +198,7 @@ shipyard_ensure_project_session() {
         tmux set-option -t "$session_name" @shipyard_project_root "$project_root"
         tmux set-option -w -t "$repo_window_id" @shipyard_role repo
     else
-        existing_root="$(tmux show-options -qv -t "$session_name" @shipyard_project_root 2>/dev/null)"
+        existing_root="$(shipyard_session_option "$session_name" @shipyard_project_root 2>/dev/null)"
         if [[ "$existing_root" != "$project_root" ]]; then
             return 1
         fi
@@ -251,7 +263,7 @@ shipyard_attach() {
 
     while IFS= read -r session_name; do
         [[ -n "$session_name" ]] || continue
-        [[ -n "$(tmux show-options -qv -t "$session_name" @shipyard_project_root 2>/dev/null)" ]] || continue
+        [[ -n "$(shipyard_session_option "$session_name" @shipyard_project_root 2>/dev/null)" ]] || continue
 
         window_id="$(shipyard_command_window "$session_name")"
         if [[ -z "$window_id" ]]; then
@@ -347,7 +359,7 @@ shipyard_forget_project() {
     project_file="$(shipyard_project_file "$session_name")"
     [[ -f "$project_file" ]] || return 0
     IFS=$'\t' read -r recorded_session recorded_root < "$project_file"
-    live_root="$(tmux show-options -qv -t "$session_name" @shipyard_project_root 2>/dev/null)"
+    live_root="$(shipyard_session_option "$session_name" @shipyard_project_root 2>/dev/null)"
     if [[ -n "$recorded_root" && -n "$live_root" && "$recorded_root" == "$live_root" ]]; then
         rm -f "$project_file"
     fi
@@ -371,7 +383,7 @@ shipyard_snapshot_agent() {
         IFS=$'\t' read -r recorded_window_id worktree recorded_lease_id lease_holder < "$lease_file"
         [[ "$recorded_window_id" == "$window_id" && "$recorded_lease_id" == "$lease_id" ]] || return 0
         session_name="$(tmux display-message -p -t "$window_id" '#{session_name}' 2>/dev/null)"
-        project_root="$(tmux show-options -qv -t "$session_name" @shipyard_project_root 2>/dev/null)"
+        project_root="$(shipyard_session_option "$session_name" @shipyard_project_root 2>/dev/null)"
         intent="$(tmux show-options -wqv -t "$window_id" @shipyard_intent 2>/dev/null)"
         base_head="$(tmux show-options -wqv -t "$window_id" @shipyard_base_head 2>/dev/null)"
         base_branch="$(tmux show-options -wqv -t "$window_id" @shipyard_base_branch 2>/dev/null)"
@@ -461,7 +473,7 @@ shipyard_restore_intent() {
             -s "$session_name" -n "$intent" -c "$worktree")" || return
         tmux set-option -t "$session_name" @shipyard_project_root "$project_root"
     else
-        existing_root="$(tmux show-options -qv -t "$session_name" @shipyard_project_root 2>/dev/null)"
+        existing_root="$(shipyard_session_option "$session_name" @shipyard_project_root 2>/dev/null)"
         if [[ "$existing_root" != "$project_root" ]]; then
             printf 'forge: cannot restore %s: session %s belongs to a different project; leaving manifest for a later retry\n' \
                 "$intent" "$session_name" >&2
@@ -539,7 +551,7 @@ shipyard_restore() {
             continue
         fi
         if tmux has-session -t "=$session_name" 2>/dev/null; then
-            existing_root="$(tmux show-options -qv -t "$session_name" @shipyard_project_root 2>/dev/null)"
+            existing_root="$(shipyard_session_option "$session_name" @shipyard_project_root 2>/dev/null)"
             if [[ "$existing_root" != "$project_root" ]]; then
                 result=1
                 continue
@@ -555,7 +567,7 @@ shipyard_restore() {
     while IFS= read -r session_name; do
         [[ -n "$session_name" ]] || continue
         if window_id="$(shipyard_ensure_project_session \
-            "$(tmux show-options -qv -t "$session_name" @shipyard_project_root)" "$session_name")"; then
+            "$(shipyard_session_option "$session_name" @shipyard_project_root)" "$session_name")"; then
             [[ -n "$target_window" ]] || target_window="$window_id"
         else
             result=1
@@ -605,7 +617,7 @@ shipyard_pause() {
 
     while IFS= read -r session_name; do
         [[ -n "$session_name" ]] || continue
-        project_root="$(tmux show-options -qv -t "$session_name" @shipyard_project_root)"
+        project_root="$(shipyard_session_option "$session_name" @shipyard_project_root)"
         [[ -n "$project_root" ]] || continue
 
         while IFS= read -r window_id; do
@@ -945,7 +957,7 @@ shipyard_next_repo_window() {
 
     while IFS= read -r session_name; do
         [[ -n "$session_name" && "$session_name" != "$exclude_session" ]] || continue
-        [[ -n "$(tmux show-options -qv -t "$session_name" @shipyard_project_root 2>/dev/null)" ]] || continue
+        [[ -n "$(shipyard_session_option "$session_name" @shipyard_project_root 2>/dev/null)" ]] || continue
         candidate="$(shipyard_repo_window "$session_name")"
         if [[ -z "$candidate" ]]; then
             candidate="$(shipyard_command_window "$session_name")"
