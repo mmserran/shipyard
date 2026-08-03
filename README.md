@@ -128,22 +128,22 @@ returned — worktrees, uncommitted changes, and leases stay exactly as they
 were. Run `forge open` with no path afterward to restore every one of them,
 the same way it recovers from a reboot.
 
-## Restore after a reboot
+## Restore after a reboot or pause
 
 ```bash
 forge open
 ```
 
-`forge open` with no path doesn't open a project — it restores every leased
-intent window instead. Shipyard stores a durable manifest for every active
-intent, plus a manifest for each repository `forge pause` saved. After a
-reboot, `forge pause`, or other tmux server loss, this verifies that each
-exact Treehouse lease is still active, recreates the repository sessions and
-standard two-pane intent windows, restarts their watchers, rebuilds any
-repo/command windows a pause saved, and attaches to the recovered sessions. It
-never silently substitutes a new lease when the original one is gone, and it
-never silently opens the current directory as a project either — pass a path
-(even `.`) for that.
+`forge open` with no path doesn't open a project — it restores every paused
+repository session and leased intent window instead. Shipyard stores a durable
+manifest for every active intent, plus a manifest for each repository
+`forge pause` saved. After a reboot, `forge pause`, or other tmux server loss,
+this verifies that each exact Treehouse lease is still active, recreates the
+repository sessions and standard two-pane intent windows, restarts their
+watchers, rebuilds any repo/command windows a pause saved, and attaches to the
+recovered sessions. It never silently substitutes a new lease when the original
+one is gone, and it never silently opens the current directory as a project
+either — pass a path (even `.`) for that.
 The watcher automatically backfills manifests for intent windows created by an
 older Shipyard version, so they become recoverable after upgrading too.
 
@@ -241,7 +241,7 @@ because it does not repair PR comments or non-image local links.
 ```text
 forge             # attach to a pre-existing shipyard window, if one is open
 forge open [path]  # open/create the repo's Yazi and command windows
-forge open        # no path: restore active intent windows after a reboot
+forge open        # no path: restore paused sessions and intents
 forge new <intent>
 forge close  # close one intent, or the whole repo from its command window
 forge pause  # save and close every open repo/intent window, keeping leases
