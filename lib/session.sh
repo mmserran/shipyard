@@ -50,21 +50,35 @@ shipyard_session_for_project() {
     local session_name
     local existing_root
     local digest
+    local project_file
+    local recorded_session
+    local recorded_root
 
     session_name="$(shipyard_session_name "$project_root")"
-    if ! tmux has-session -t "=$session_name" 2>/dev/null; then
-        printf '%s\n' "$session_name"
+    if tmux has-session -t "=$session_name" 2>/dev/null; then
+        existing_root="$(tmux show-options -qv -t "$session_name" @shipyard_project_root)"
+        if [[ "$existing_root" == "$project_root" ]]; then
+            printf '%s\n' "$session_name"
+            return
+        fi
+        digest="$(printf '%s' "$project_root" | cksum | awk '{print $1}')"
+        printf '%s-%s\n' "$session_name" "$digest"
         return
     fi
 
-    existing_root="$(tmux show-options -qv -t "$session_name" @shipyard_project_root)"
-    if [[ "$existing_root" == "$project_root" ]]; then
-        printf '%s\n' "$session_name"
+    project_file="$(shipyard_project_file "$session_name")"
+    if [[ -f "$project_file" ]]; then
+        IFS=$'\t' read -r recorded_session recorded_root < "$project_file"
+        if [[ "$recorded_root" == "$project_root" ]]; then
+            printf '%s\n' "$session_name"
+            return
+        fi
+        digest="$(printf '%s' "$project_root" | cksum | awk '{print $1}')"
+        printf '%s-%s\n' "$session_name" "$digest"
         return
     fi
 
-    digest="$(printf '%s' "$project_root" | cksum | awk '{print $1}')"
-    printf '%s-%s\n' "$session_name" "$digest"
+    printf '%s\n' "$session_name"
 }
 
 shipyard_command_window() {
@@ -471,9 +485,8 @@ shipyard_restore() {
     # recreate the session; drop it only after a successful ensure, when the
     # live session belongs to this same project root, or when the record is
     # corrupt. A basename collision with a different (or unmarked) session
-    # must keep the file — pause frees short names that
-    # shipyard_session_for_project will hand to another project without
-    # consulting paused manifests.
+    # must keep the file — shipyard_session_for_project also reserves paused
+    # short names, but a live foreign session can still occupy the name.
     for project_file in "$state_home"/projects/*.project; do
         [[ -e "$project_file" ]] || continue
         found_project=1

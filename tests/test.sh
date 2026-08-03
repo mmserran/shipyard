@@ -1693,23 +1693,41 @@ git -C "$pause_collide_b" -c user.email=test@example.com -c user.name=test \
 TMUX="test" shipyard_open "$pause_collide_a"
 pause_collide_session="$(shipyard_session_name "$(shipyard_project_root "$pause_collide_a")")"
 shipyard_pause >/dev/null
+pause_collide_b_session="$(shipyard_session_for_project "$(shipyard_project_root "$pause_collide_b")")"
+case "$pause_collide_b_session" in
+    "$pause_collide_session"-*)
+        ;;
+    *)
+        printf 'not ok - open of a same-basename project must digest away from a paused short name\n' >&2
+        exit 1
+        ;;
+esac
 TMUX="test" shipyard_open "$pause_collide_b"
 assert_equal "$(shipyard_project_root "$pause_collide_b")" \
-    "$(tmux show-options -qv -t "$pause_collide_session" @shipyard_project_root)" \
-    "a later open of a same-basename project reuses the freed short session name"
-restore_collide_status=0
-TMUX="test" shipyard_restore >/dev/null || restore_collide_status=$?
-if [[ "$restore_collide_status" -eq 0 ]]; then
-    printf 'not ok - forge open reports failure when a paused project name is taken by another root\n' >&2
-    exit 1
-fi
+    "$(tmux show-options -qv -t "$pause_collide_b_session" @shipyard_project_root)" \
+    "a later open of a same-basename project lands in a digested session"
 if [[ ! -e "$(shipyard_project_file "$pause_collide_session")" ]]; then
-    printf 'not ok - forge open keeps a paused project manifest when another root holds its session name\n' >&2
+    printf 'not ok - opening another same-basename project must leave the paused manifest alone\n' >&2
     exit 1
 fi
-printf 'ok - forge open keeps a paused project manifest when another root holds its session name\n'
+IFS=$'\t' read -r _ pause_collide_recorded_root \
+    < "$(shipyard_project_file "$pause_collide_session")"
+assert_equal "$(shipyard_project_root "$pause_collide_a")" "$pause_collide_recorded_root" \
+    "paused short-name manifest still records the original project root after a colliding open"
+shipyard_pause >/dev/null
+if [[ ! -e "$(shipyard_project_file "$pause_collide_session")" ]]; then
+    printf 'not ok - pausing the digested session must not destroy the paused short-name manifest\n' >&2
+    exit 1
+fi
+IFS=$'\t' read -r _ pause_collide_recorded_root \
+    < "$(shipyard_project_file "$pause_collide_session")"
+assert_equal "$(shipyard_project_root "$pause_collide_a")" "$pause_collide_recorded_root" \
+    "pausing a digested same-basename session does not overwrite the paused short-name manifest"
+printf 'ok - paused short names are reserved so later open/pause cannot clobber them\n'
+tmux kill-session -t "=$pause_collide_b_session" 2>/dev/null || true
 tmux kill-session -t "=$pause_collide_session" 2>/dev/null || true
-rm -f "$(shipyard_project_file "$pause_collide_session")"
+rm -f "$(shipyard_project_file "$pause_collide_session")" \
+    "$(shipyard_project_file "$pause_collide_b_session")"
 
 rm -f "$(shipyard_state_home)"/intents/*.intent 2>/dev/null || true
 pause_intent_collide_a="$test_tmp/pause-intent-collide/a/app"
@@ -1749,29 +1767,45 @@ treehouse() {
     esac
 }
 shipyard_pause >/dev/null
+pause_intent_collide_b_session="$(shipyard_session_for_project "$(shipyard_project_root "$pause_intent_collide_b")")"
+case "$pause_intent_collide_b_session" in
+    "$pause_intent_collide_session"-*)
+        ;;
+    *)
+        printf 'not ok - open must digest away from a paused short name before intent restore\n' >&2
+        exit 1
+        ;;
+esac
 TMUX="test" shipyard_open "$pause_intent_collide_b"
 assert_equal "$(shipyard_project_root "$pause_intent_collide_b")" \
-    "$(tmux show-options -qv -t "$pause_intent_collide_session" @shipyard_project_root)" \
-    "a later open of a same-basename project reuses the freed short session name for intent collision"
+    "$(tmux show-options -qv -t "$pause_intent_collide_b_session" @shipyard_project_root)" \
+    "a later open of a same-basename project lands in a digested session for intent collision"
 restore_intent_collide_status=0
 TMUX="test" shipyard_restore >/dev/null || restore_intent_collide_status=$?
-if [[ "$restore_intent_collide_status" -eq 0 ]]; then
-    printf 'not ok - forge open reports failure when a paused intent name is taken by another root\n' >&2
+if [[ "$restore_intent_collide_status" -ne 0 ]]; then
+    printf 'not ok - forge open should restore paused intents into their reserved short-name session\n' >&2
     exit 1
 fi
-misplaced_intent="$(tmux list-windows -t "=$pause_intent_collide_session" \
+misplaced_intent="$(tmux list-windows -t "=$pause_intent_collide_b_session" \
     -F '#{@shipyard_lease_id}' 2>/dev/null | grep -c '^lease-intent-collide$' || true)"
 if [[ "$misplaced_intent" -ne 0 ]]; then
     printf 'not ok - forge open must not restore a paused intent into another project session\n' >&2
     exit 1
 fi
-if [[ ! -e "$(shipyard_intent_file lease-intent-collide)" ]]; then
-    printf 'not ok - forge open keeps a paused intent manifest when another root holds its session name\n' >&2
+assert_equal "$(shipyard_project_root "$pause_intent_collide_a")" \
+    "$(tmux show-options -qv -t "$pause_intent_collide_session" @shipyard_project_root)" \
+    "paused intent restore recreates the original short-name session"
+restored_intent="$(tmux list-windows -t "=$pause_intent_collide_session" \
+    -F '#{@shipyard_lease_id}' 2>/dev/null | grep -c '^lease-intent-collide$' || true)"
+if [[ "$restored_intent" -ne 1 ]]; then
+    printf 'not ok - forge open must restore the paused intent into its own session\n' >&2
     exit 1
 fi
-printf 'ok - forge open keeps a paused intent when another root holds its session name\n'
+printf 'ok - forge open restores paused intents beside a digested same-basename session\n'
 tmux kill-session -t "=$pause_intent_collide_session" 2>/dev/null || true
-rm -f "$(shipyard_project_file "$pause_intent_collide_session")"
+tmux kill-session -t "=$pause_intent_collide_b_session" 2>/dev/null || true
+rm -f "$(shipyard_project_file "$pause_intent_collide_session")" \
+    "$(shipyard_project_file "$pause_intent_collide_b_session")"
 shipyard_forget_intent lease-intent-collide
 
 pause_close_collide_a="$test_tmp/pause-close-collide/a/app"
@@ -1786,10 +1820,10 @@ git -C "$pause_close_collide_b" -c user.email=test@example.com -c user.name=test
 TMUX="test" shipyard_open "$pause_close_collide_a"
 pause_close_collide_session="$(shipyard_session_name "$(shipyard_project_root "$pause_close_collide_a")")"
 shipyard_pause >/dev/null
-TMUX="test" shipyard_open "$pause_close_collide_b"
-assert_equal "$(shipyard_project_root "$pause_close_collide_b")" \
-    "$(tmux show-options -qv -t "$pause_close_collide_session" @shipyard_project_root)" \
-    "a later open of a same-basename project reuses the freed short session name before close"
+tmux new-session -d -s "$pause_close_collide_session" -n command -c "$pause_close_collide_b"
+tmux set-option -t "$pause_close_collide_session" @shipyard_project_root \
+    "$(shipyard_project_root "$pause_close_collide_b")"
+tmux set-option -w -t "=$pause_close_collide_session:" @shipyard_role command
 pause_close_collide_command="$(shipyard_command_window "$pause_close_collide_session")"
 shipyard_close_command_window "$pause_close_collide_command"
 if [[ ! -e "$(shipyard_project_file "$pause_close_collide_session")" ]]; then
