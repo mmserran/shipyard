@@ -50,31 +50,58 @@ shipyard_session_for_project() {
     local session_name
     local existing_root
     local digest
+    local digested_name
     local project_file
     local recorded_session
     local recorded_root
+    local candidate
+    local state_home
 
     session_name="$(shipyard_session_name "$project_root")"
-    if tmux has-session -t "=$session_name" 2>/dev/null; then
-        existing_root="$(tmux show-options -qv -t "$session_name" @shipyard_project_root)"
+    digest="$(printf '%s' "$project_root" | cksum | awk '{print $1}')"
+    digested_name="${session_name}-${digest}"
+
+    while IFS= read -r candidate; do
+        [[ -n "$candidate" ]] || continue
+        existing_root="$(tmux show-options -qv -t "$candidate" @shipyard_project_root 2>/dev/null)"
         if [[ "$existing_root" == "$project_root" ]]; then
-            printf '%s\n' "$session_name"
+            printf '%s\n' "$candidate"
             return
         fi
-        digest="$(printf '%s' "$project_root" | cksum | awk '{print $1}')"
-        printf '%s-%s\n' "$session_name" "$digest"
-        return
-    fi
+    done < <(tmux list-sessions -F '#{?@shipyard_project_root,#{session_name},}' 2>/dev/null)
 
+    project_file="$(shipyard_project_file "$digested_name")"
+    if [[ -f "$project_file" ]]; then
+        IFS=$'\t' read -r recorded_session recorded_root < "$project_file"
+        if [[ "$recorded_root" == "$project_root" ]]; then
+            printf '%s\n' "${recorded_session:-$digested_name}"
+            return
+        fi
+    fi
     project_file="$(shipyard_project_file "$session_name")"
     if [[ -f "$project_file" ]]; then
         IFS=$'\t' read -r recorded_session recorded_root < "$project_file"
         if [[ "$recorded_root" == "$project_root" ]]; then
-            printf '%s\n' "$session_name"
+            printf '%s\n' "${recorded_session:-$session_name}"
             return
         fi
-        digest="$(printf '%s' "$project_root" | cksum | awk '{print $1}')"
-        printf '%s-%s\n' "$session_name" "$digest"
+    fi
+    state_home="$(shipyard_state_home)"
+    for project_file in "$state_home"/projects/*.project; do
+        [[ -e "$project_file" ]] || continue
+        IFS=$'\t' read -r recorded_session recorded_root < "$project_file"
+        if [[ -n "$recorded_session" && "$recorded_root" == "$project_root" ]]; then
+            printf '%s\n' "$recorded_session"
+            return
+        fi
+    done
+
+    if tmux has-session -t "=$session_name" 2>/dev/null; then
+        printf '%s\n' "$digested_name"
+        return
+    fi
+    if [[ -f "$(shipyard_project_file "$session_name")" ]]; then
+        printf '%s\n' "$digested_name"
         return
     fi
 
@@ -482,11 +509,12 @@ shipyard_restore() {
     # Repo/command-only sessions (no intents of their own) have no other
     # durable record; a paused project's manifest is the only thing that can
     # rebuild them. Keep it on ensure failure so a later retry can still
-    # recreate the session; drop it only after a successful ensure, when the
-    # live session belongs to this same project root, or when the record is
-    # corrupt. A basename collision with a different (or unmarked) session
-    # must keep the file — shipyard_session_for_project also reserves paused
-    # short names, but a live foreign session can still occupy the name.
+    # recreate the session; drop it only after a successful ensure (including
+    # when a matching-root session is already live but may be incomplete), or
+    # when the record is corrupt. A basename collision with a different (or
+    # unmarked) session must keep the file — shipyard_session_for_project also
+    # reserves paused short names, but a live foreign session can still occupy
+    # the name.
     for project_file in "$state_home"/projects/*.project; do
         [[ -e "$project_file" ]] || continue
         found_project=1
@@ -497,12 +525,10 @@ shipyard_restore() {
         fi
         if tmux has-session -t "=$session_name" 2>/dev/null; then
             existing_root="$(tmux show-options -qv -t "$session_name" @shipyard_project_root 2>/dev/null)"
-            if [[ "$existing_root" == "$project_root" ]]; then
-                rm -f "$project_file"
-            else
+            if [[ "$existing_root" != "$project_root" ]]; then
                 result=1
+                continue
             fi
-            continue
         fi
         if shipyard_ensure_project_session "$project_root" "$session_name" >/dev/null; then
             rm -f "$project_file"
