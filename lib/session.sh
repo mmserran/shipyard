@@ -45,26 +45,79 @@ shipyard_session_name() {
     printf '%s\n' "$session_name"
 }
 
+# Read a session option by exact session name. `tmux show-options -t name`
+# prefix-matches (so `demo-repo` can return `demo-repo-only`'s value), and
+# `show-options`/`set-option` do not honor the `=` exact-target syntax that
+# `has-session` does. Listing sessions and filtering avoids both traps.
+shipyard_session_option() {
+    local session_name="$1"
+    local option="$2"
+
+    tmux list-sessions -F "#{session_name}"$'\t'"#{${option}}" 2>/dev/null |
+        awk -F '\t' -v session="$session_name" '$1 == session { print $2; exit }'
+}
+
 shipyard_session_for_project() {
     local project_root="$1"
     local session_name
     local existing_root
     local digest
+    local digested_name
+    local project_file
+    local recorded_session
+    local recorded_root
+    local candidate
+    local state_home
 
     session_name="$(shipyard_session_name "$project_root")"
-    if ! tmux has-session -t "=$session_name" 2>/dev/null; then
-        printf '%s\n' "$session_name"
-        return
-    fi
-
-    existing_root="$(tmux show-options -qv -t "$session_name" @shipyard_project_root)"
-    if [[ "$existing_root" == "$project_root" ]]; then
-        printf '%s\n' "$session_name"
-        return
-    fi
-
     digest="$(printf '%s' "$project_root" | cksum | awk '{print $1}')"
-    printf '%s-%s\n' "$session_name" "$digest"
+    digested_name="${session_name}-${digest}"
+
+    while IFS= read -r candidate; do
+        [[ -n "$candidate" ]] || continue
+        existing_root="$(shipyard_session_option "$candidate" @shipyard_project_root 2>/dev/null)"
+        if [[ "$existing_root" == "$project_root" ]]; then
+            printf '%s\n' "$candidate"
+            return
+        fi
+    done < <(tmux list-sessions -F '#{?@shipyard_project_root,#{session_name},}' 2>/dev/null)
+
+    project_file="$(shipyard_project_file "$digested_name")"
+    if [[ -f "$project_file" ]]; then
+        IFS=$'\t' read -r recorded_session recorded_root < "$project_file"
+        if [[ "$recorded_root" == "$project_root" ]]; then
+            printf '%s\n' "${recorded_session:-$digested_name}"
+            return
+        fi
+    fi
+    project_file="$(shipyard_project_file "$session_name")"
+    if [[ -f "$project_file" ]]; then
+        IFS=$'\t' read -r recorded_session recorded_root < "$project_file"
+        if [[ "$recorded_root" == "$project_root" ]]; then
+            printf '%s\n' "${recorded_session:-$session_name}"
+            return
+        fi
+    fi
+    state_home="$(shipyard_state_home)"
+    for project_file in "$state_home"/projects/*.project; do
+        [[ -e "$project_file" ]] || continue
+        IFS=$'\t' read -r recorded_session recorded_root < "$project_file"
+        if [[ -n "$recorded_session" && "$recorded_root" == "$project_root" ]]; then
+            printf '%s\n' "$recorded_session"
+            return
+        fi
+    done
+
+    if tmux has-session -t "=$session_name" 2>/dev/null; then
+        printf '%s\n' "$digested_name"
+        return
+    fi
+    if [[ -f "$(shipyard_project_file "$session_name")" ]]; then
+        printf '%s\n' "$digested_name"
+        return
+    fi
+
+    printf '%s\n' "$session_name"
 }
 
 shipyard_command_window() {
@@ -122,28 +175,20 @@ shipyard_ensure_repo_window() {
     printf '%s\n' "$repo_window_id"
 }
 
+# Creates (or reuses) a project's tmux session, Yazi repo window, and command
+# window, without attaching. Shared by shipyard_open and every restore path
+# (`forge open` with no path, recreating a session `forge pause` tore down)
+# so both stay in lockstep on how a project's windows are structured.
+#
 # Unlike `forge new`, these windows are not leased from Treehouse and carry no
 # intent metadata or watcher. The repo window runs Yazi at the project root;
 # the command window remains a plain shell for repository-wide commands.
-shipyard_open() {
-    local requested_path="${1:-.}"
-    local project_root
-    local session_name
+shipyard_ensure_project_session() {
+    local project_root="$1"
+    local session_name="$2"
     local repo_window_id
     local command_window_id
-    local window_id
-
-    project_root="$(shipyard_project_root "$requested_path")" || return
-    if ! command -v tmux >/dev/null 2>&1; then
-        printf 'forge: tmux is not installed\n' >&2
-        return 1
-    fi
-    if ! command -v yazi >/dev/null 2>&1; then
-        printf 'forge: yazi is not installed\n' >&2
-        return 1
-    fi
-
-    session_name="$(shipyard_session_for_project "$project_root")"
+    local existing_root
 
     if ! tmux has-session -t "=$session_name" 2>/dev/null; then
         if ! repo_window_id="$(tmux new-session -d -P -F '#{window_id}' \
@@ -153,6 +198,10 @@ shipyard_open() {
         tmux set-option -t "$session_name" @shipyard_project_root "$project_root"
         tmux set-option -w -t "$repo_window_id" @shipyard_role repo
     else
+        existing_root="$(shipyard_session_option "$session_name" @shipyard_project_root 2>/dev/null)"
+        if [[ "$existing_root" != "$project_root" ]]; then
+            return 1
+        fi
         if ! repo_window_id="$(shipyard_ensure_repo_window "$session_name" "$project_root")"; then
             return 1
         fi
@@ -169,8 +218,28 @@ shipyard_open() {
 
     shipyard_refresh_window_context "$command_window_id"
     shipyard_refresh_intent_numbers "$session_name"
+    printf '%s\n' "$command_window_id"
+}
 
-    window_id="$command_window_id"
+shipyard_open() {
+    local requested_path="${1:-.}"
+    local project_root
+    local session_name
+    local window_id
+
+    project_root="$(shipyard_project_root "$requested_path")" || return
+    if ! command -v tmux >/dev/null 2>&1; then
+        printf 'forge: tmux is not installed\n' >&2
+        return 1
+    fi
+    if ! command -v yazi >/dev/null 2>&1; then
+        printf 'forge: yazi is not installed\n' >&2
+        return 1
+    fi
+
+    session_name="$(shipyard_session_for_project "$project_root")"
+    window_id="$(shipyard_ensure_project_session "$project_root" "$session_name")" || return 1
+
     if [[ -n "${TMUX:-}" ]]; then
         tmux switch-client -t "$window_id"
     else
@@ -194,7 +263,7 @@ shipyard_attach() {
 
     while IFS= read -r session_name; do
         [[ -n "$session_name" ]] || continue
-        [[ -n "$(tmux show-options -qv -t "$session_name" @shipyard_project_root 2>/dev/null)" ]] || continue
+        [[ -n "$(shipyard_session_option "$session_name" @shipyard_project_root 2>/dev/null)" ]] || continue
 
         window_id="$(shipyard_command_window "$session_name")"
         if [[ -z "$window_id" ]]; then
@@ -255,6 +324,47 @@ shipyard_forget_intent() {
     rm -f "$(shipyard_intent_file "$lease_id")"
 }
 
+shipyard_project_file() {
+    local session_name="$1"
+    printf '%s/projects/%s.project\n' "$(shipyard_state_home)" "$session_name"
+}
+
+# Durable record of a paused session's repository identity. Intent manifests
+# already survive tmux loss on their own, so they cover intent windows; a
+# repo/command-only session (no intents yet) has nothing else recording that
+# it existed, so `forge pause` writes this and `forge open` consumes it to
+# recreate exactly those two windows.
+shipyard_record_project() {
+    local session_name="$1"
+    local project_root="$2"
+    local state_home
+    local project_file
+    local temporary_file
+
+    state_home="$(shipyard_state_home)"
+    mkdir -p "$state_home/projects"
+    project_file="$(shipyard_project_file "$session_name")"
+    temporary_file="${project_file}.tmp.$$"
+    printf '%s\t%s\n' "$session_name" "$project_root" > "$temporary_file"
+    mv -f "$temporary_file" "$project_file"
+}
+
+shipyard_forget_project() {
+    local session_name="$1"
+    local project_file
+    local recorded_session
+    local recorded_root
+    local live_root
+
+    project_file="$(shipyard_project_file "$session_name")"
+    [[ -f "$project_file" ]] || return 0
+    IFS=$'\t' read -r recorded_session recorded_root < "$project_file"
+    live_root="$(shipyard_session_option "$session_name" @shipyard_project_root 2>/dev/null)"
+    if [[ -n "$recorded_root" && -n "$live_root" && "$recorded_root" == "$live_root" ]]; then
+        rm -f "$project_file"
+    fi
+}
+
 shipyard_snapshot_agent() {
     local window_id="$1"
     local lease_id
@@ -273,7 +383,7 @@ shipyard_snapshot_agent() {
         IFS=$'\t' read -r recorded_window_id worktree recorded_lease_id lease_holder < "$lease_file"
         [[ "$recorded_window_id" == "$window_id" && "$recorded_lease_id" == "$lease_id" ]] || return 0
         session_name="$(tmux display-message -p -t "$window_id" '#{session_name}' 2>/dev/null)"
-        project_root="$(tmux show-options -qv -t "$session_name" @shipyard_project_root 2>/dev/null)"
+        project_root="$(shipyard_session_option "$session_name" @shipyard_project_root 2>/dev/null)"
         intent="$(tmux show-options -wqv -t "$window_id" @shipyard_intent 2>/dev/null)"
         base_head="$(tmux show-options -wqv -t "$window_id" @shipyard_base_head 2>/dev/null)"
         base_branch="$(tmux show-options -wqv -t "$window_id" @shipyard_base_branch 2>/dev/null)"
@@ -321,7 +431,8 @@ shipyard_resume_hint() {
 shipyard_restore_intent() {
     local intent_file="$1"
     local lease_id project_root session_name intent worktree lease_holder base_head base_branch agent
-    local window_id top_pane_id watcher_command hint
+    local window_id top_pane_id watcher_command hint existing_root
+    local project_file paused_root
 
     IFS=$'\t' read -r lease_id project_root session_name intent worktree lease_holder \
         base_head base_branch agent < "$intent_file"
@@ -349,10 +460,25 @@ shipyard_restore_intent() {
     fi
 
     if ! tmux has-session -t "=$session_name" 2>/dev/null; then
+        project_file="$(shipyard_project_file "$session_name")"
+        if [[ -f "$project_file" ]]; then
+            IFS=$'\t' read -r _ paused_root < "$project_file"
+            if [[ -z "$paused_root" || "$paused_root" != "$project_root" ]]; then
+                printf 'forge: cannot restore %s: session %s is reserved by a paused project; leaving manifest for a later retry\n' \
+                    "$intent" "$session_name" >&2
+                return 1
+            fi
+        fi
         window_id="$(tmux new-session -d -P -F '#{window_id}' \
             -s "$session_name" -n "$intent" -c "$worktree")" || return
         tmux set-option -t "$session_name" @shipyard_project_root "$project_root"
     else
+        existing_root="$(shipyard_session_option "$session_name" @shipyard_project_root 2>/dev/null)"
+        if [[ "$existing_root" != "$project_root" ]]; then
+            printf 'forge: cannot restore %s: session %s belongs to a different project; leaving manifest for a later retry\n' \
+                "$intent" "$session_name" >&2
+            return 1
+        fi
         while IFS= read -r window_id; do
             [[ -n "$window_id" ]] || continue
             if [[ "$(tmux show-options -wqv -t "$window_id" @shipyard_lease_id)" == "$lease_id" ]]; then
@@ -384,8 +510,11 @@ shipyard_restore_intent() {
 }
 
 shipyard_restore() {
-    local state_home intent_file session_name target_window="" result=0
+    local state_home intent_file project_file session_name project_root existing_root
+    local target_window="" result=0
     local found_intent=0
+    local found_project=0
+    local window_id
 
     state_home="$(shipyard_state_home)"
     for dependency in tmux treehouse yazi; do
@@ -394,7 +523,8 @@ shipyard_restore() {
             return 1
         fi
     done
-    mkdir -p "$state_home/intents"
+    mkdir -p "$state_home/intents" "$state_home/projects"
+
     for intent_file in "$state_home"/intents/*.intent; do
         [[ -e "$intent_file" ]] || continue
         found_intent=1
@@ -402,16 +532,51 @@ shipyard_restore() {
             result=1
         fi
     done
+
+    # Repo/command-only sessions (no intents of their own) have no other
+    # durable record; a paused project's manifest is the only thing that can
+    # rebuild them. Keep it on ensure failure so a later retry can still
+    # recreate the session; drop it only after a successful ensure (including
+    # when a matching-root session is already live but may be incomplete), or
+    # when the record is corrupt. A basename collision with a different (or
+    # unmarked) session must keep the file — shipyard_session_for_project also
+    # reserves paused short names, but a live foreign session can still occupy
+    # the name.
+    for project_file in "$state_home"/projects/*.project; do
+        [[ -e "$project_file" ]] || continue
+        found_project=1
+        IFS=$'\t' read -r session_name project_root < "$project_file"
+        if [[ -z "$session_name" || -z "$project_root" ]]; then
+            rm -f "$project_file"
+            continue
+        fi
+        if tmux has-session -t "=$session_name" 2>/dev/null; then
+            existing_root="$(shipyard_session_option "$session_name" @shipyard_project_root 2>/dev/null)"
+            if [[ "$existing_root" != "$project_root" ]]; then
+                result=1
+                continue
+            fi
+        fi
+        if shipyard_ensure_project_session "$project_root" "$session_name" >/dev/null; then
+            rm -f "$project_file"
+        else
+            result=1
+        fi
+    done
+
     while IFS= read -r session_name; do
         [[ -n "$session_name" ]] || continue
-        shipyard_ensure_repo_window "$session_name" \
-            "$(tmux show-options -qv -t "$session_name" @shipyard_project_root)" >/dev/null || true
-        shipyard_refresh_intent_numbers "$session_name"
-        [[ -n "$target_window" ]] || target_window="$(shipyard_command_window "$session_name")"
-        [[ -n "$target_window" ]] || target_window="$(shipyard_repo_window "$session_name")"
+        if window_id="$(shipyard_ensure_project_session \
+            "$(shipyard_session_option "$session_name" @shipyard_project_root)" "$session_name")"; then
+            [[ -n "$target_window" ]] || target_window="$window_id"
+        else
+            result=1
+        fi
     done < <(tmux list-sessions -F '#{?@shipyard_project_root,#{session_name},}' 2>/dev/null)
+
     if [[ -z "$target_window" ]]; then
-        [[ "$found_intent" -eq 1 ]] || printf 'forge: no prior sessions; pass a path to open a project (forge open <path>)\n'
+        [[ "$found_intent" -eq 1 || "$found_project" -eq 1 ]] ||
+            printf 'forge: no prior sessions; pass a path to open a project (forge open <path>)\n'
         return "$result"
     fi
     if [[ -n "${TMUX:-}" ]]; then
@@ -420,6 +585,74 @@ shipyard_restore() {
         tmux attach-session -t "$target_window"
     fi
     return "$result"
+}
+
+# Saves everything needed to fully recreate every open shipyard session, then
+# tears them down. Intent windows are already durable via their manifest
+# (refreshed here so the resume hint reflects the latest observed agent); a
+# repository's plain repo/command windows are not durable anywhere else, so
+# their identity is recorded too. Each intent window's lease record is
+# disarmed before the session dies, so the window-unlinked hook's later
+# `forge reap` has nothing to return -- the lease stays active in Treehouse
+# throughout, and `forge open` rebuilds a fresh lease record for the window
+# it recreates.
+shipyard_pause() {
+    local session_name
+    local project_root
+    local window_id
+    local paused=0
+    local current_session=""
+    local deferred_session=""
+    local sessions=""
+    local kill_cmd
+
+    if ! command -v tmux >/dev/null 2>&1; then
+        printf 'forge: tmux is not installed\n' >&2
+        return 1
+    fi
+
+    if [[ -n "${TMUX_PANE:-}" ]]; then
+        current_session="$(tmux display-message -p -t "$TMUX_PANE" '#{session_name}' 2>/dev/null)" || true
+    fi
+
+    while IFS= read -r session_name; do
+        [[ -n "$session_name" ]] || continue
+        project_root="$(shipyard_session_option "$session_name" @shipyard_project_root)"
+        [[ -n "$project_root" ]] || continue
+
+        while IFS= read -r window_id; do
+            [[ -n "$window_id" ]] || continue
+            shipyard_snapshot_agent "$window_id"
+            shipyard_disarm_lease "$window_id"
+        done < <(tmux list-windows -t "=$session_name" \
+            -F '#{?@shipyard_worktree,#{window_id},}' 2>/dev/null)
+
+        shipyard_record_project "$session_name" "$project_root"
+        sessions+="${session_name}"$'\n'
+        if [[ -n "$current_session" && "$session_name" == "$current_session" ]]; then
+            deferred_session="$session_name"
+        fi
+        paused=$((paused + 1))
+    done < <(tmux list-sessions -F '#{?@shipyard_project_root,#{session_name},}' 2>/dev/null)
+
+    while IFS= read -r session_name; do
+        [[ -n "$session_name" ]] || continue
+        if [[ -n "$deferred_session" && "$session_name" == "$deferred_session" ]]; then
+            continue
+        fi
+        tmux kill-session -t "=$session_name"
+    done <<< "$sessions"
+
+    if [[ "$paused" -eq 0 ]]; then
+        printf 'forge: no open shipyard sessions to pause\n'
+        return 0
+    fi
+    printf 'forge: paused %d shipyard session(s); run `forge open` to restore\n' "$paused"
+
+    if [[ -n "$deferred_session" ]]; then
+        printf -v kill_cmd 'tmux kill-session -t %q' "=$deferred_session"
+        tmux run-shell -b "$kill_cmd"
+    fi
 }
 
 shipyard_record_lease() {
@@ -453,6 +686,25 @@ shipyard_forget_lease() {
             rm -f "$lease_file"
             shipyard_forget_intent "$lease_id"
         fi
+    done
+    return 0
+}
+
+# Removes just a window's lease-tracking record, leaving its intent manifest
+# in place -- unlike shipyard_forget_lease, which also forgets the intent.
+# `forge pause` calls this before tearing a window down so the window-unlinked
+# hook's later `forge reap` finds no matching record and leaves the Treehouse
+# lease alone, while the intent it's paired with survives for `forge open` to
+# rebuild a fresh lease record around.
+shipyard_disarm_lease() {
+    local window_id="$1"
+    local lease_file
+    local recorded_window_id
+
+    for lease_file in "$(shipyard_state_home)/windows"/*.lease; do
+        [[ -e "$lease_file" ]] || continue
+        IFS=$'\t' read -r recorded_window_id _ < "$lease_file"
+        [[ "$recorded_window_id" == "$window_id" ]] && rm -f "$lease_file"
     done
     return 0
 }
@@ -705,7 +957,7 @@ shipyard_next_repo_window() {
 
     while IFS= read -r session_name; do
         [[ -n "$session_name" && "$session_name" != "$exclude_session" ]] || continue
-        [[ -n "$(tmux show-options -qv -t "$session_name" @shipyard_project_root 2>/dev/null)" ]] || continue
+        [[ -n "$(shipyard_session_option "$session_name" @shipyard_project_root 2>/dev/null)" ]] || continue
         candidate="$(shipyard_repo_window "$session_name")"
         if [[ -z "$candidate" ]]; then
             candidate="$(shipyard_command_window "$session_name")"
@@ -741,6 +993,7 @@ shipyard_close_command_window() {
         tmux switch-client -t "$next_window"
     fi
 
+    shipyard_forget_project "$session_name"
     tmux kill-session -t "=$session_name"
 }
 
