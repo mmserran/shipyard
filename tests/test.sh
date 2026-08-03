@@ -43,7 +43,10 @@ unset -f exit
 
 tmux() {
     if [[ "$1" == "run-shell" ]]; then
-        watcher_launch="$3"
+        watcher_launch="${3:-}"
+        if [[ "$watcher_launch" == tmux\ kill-session* ]]; then
+            eval "$watcher_launch"
+        fi
         return 0
     fi
     if [[ "$1" == "switch-client" ]]; then
@@ -51,6 +54,9 @@ tmux() {
         return 0
     fi
     if [[ "${fail_new_window:-0}" -eq 1 && "$1" == "new-window" ]]; then
+        return 1
+    fi
+    if [[ "${fail_new_session:-0}" -eq 1 && "$1" == "new-session" ]]; then
         return 1
     fi
     if [[ "$1" == "split-window" && "$*" == *" -h "* ]]; then
@@ -1616,5 +1622,63 @@ fi
 printf 'ok - forge open consumes the repo/command-only project manifest\n'
 
 tmux kill-session -t "=$pause2_session" 2>/dev/null || true
+
+pause_a_repo="$test_tmp/pause-aaa"
+pause_b_repo="$test_tmp/pause-bbb"
+git init -q "$pause_a_repo"
+git -C "$pause_a_repo" -c user.email=test@example.com -c user.name=test \
+    commit -q --allow-empty -m initial
+git init -q "$pause_b_repo"
+git -C "$pause_b_repo" -c user.email=test@example.com -c user.name=test \
+    commit -q --allow-empty -m initial
+TMUX="test" shipyard_open "$pause_a_repo"
+TMUX="test" shipyard_open "$pause_b_repo"
+pause_a_session="$(shipyard_session_name "$(shipyard_project_root "$pause_a_repo")")"
+pause_b_session="$(shipyard_session_name "$(shipyard_project_root "$pause_b_repo")")"
+pause_a_pane="$(tmux list-panes -t "=$pause_a_session" -F '#{pane_id}' | head -n1)"
+
+TMUX_PANE="$pause_a_pane" shipyard_pause >/dev/null
+
+if tmux has-session -t "=$pause_a_session" 2>/dev/null; then
+    printf 'not ok - forge pause from inside a session still closes that session\n' >&2
+    exit 1
+fi
+if tmux has-session -t "=$pause_b_session" 2>/dev/null; then
+    printf 'not ok - forge pause from inside one session still closes later siblings\n' >&2
+    exit 1
+fi
+printf 'ok - forge pause from inside one session closes every shipyard session\n'
+
+if [[ ! -e "$(shipyard_project_file "$pause_a_session")" ||
+    ! -e "$(shipyard_project_file "$pause_b_session")" ]]; then
+    printf 'not ok - forge pause records every session before deferred self-kill\n' >&2
+    exit 1
+fi
+printf 'ok - forge pause records every session before deferred self-kill\n'
+
+rm -f "$(shipyard_project_file "$pause_a_session")" \
+    "$(shipyard_project_file "$pause_b_session")"
+
+rm -f "$(shipyard_state_home)"/intents/*.intent 2>/dev/null || true
+pause_fail_repo="$test_tmp/pause-ensure-fail"
+git init -q "$pause_fail_repo"
+git -C "$pause_fail_repo" -c user.email=test@example.com -c user.name=test \
+    commit -q --allow-empty -m initial
+pause_fail_session="$(shipyard_session_name "$(shipyard_project_root "$pause_fail_repo")")"
+shipyard_record_project "$pause_fail_session" "$(shipyard_project_root "$pause_fail_repo")"
+fail_new_session=1
+restore_fail_status=0
+shipyard_restore >/dev/null || restore_fail_status=$?
+fail_new_session=0
+if [[ "$restore_fail_status" -eq 0 ]]; then
+    printf 'not ok - forge open reports failure when a paused project cannot be ensured\n' >&2
+    exit 1
+fi
+if [[ ! -e "$(shipyard_project_file "$pause_fail_session")" ]]; then
+    printf 'not ok - forge open keeps the project manifest when ensure fails\n' >&2
+    exit 1
+fi
+printf 'ok - forge open keeps the project manifest when ensure fails\n'
+rm -f "$(shipyard_project_file "$pause_fail_session")"
 
 printf 'all tests passed\n'

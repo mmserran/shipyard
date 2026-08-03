@@ -450,24 +450,36 @@ shipyard_restore() {
 
     # Repo/command-only sessions (no intents of their own) have no other
     # durable record; a paused project's manifest is the only thing that can
-    # rebuild them. A session an intent already recreated above just gets its
-    # manifest cleared here without any further action.
+    # rebuild them. Keep it on ensure failure so a later retry can still
+    # recreate the session; drop it only after a successful ensure, when the
+    # session already exists, or when the record is corrupt.
     for project_file in "$state_home"/projects/*.project; do
         [[ -e "$project_file" ]] || continue
         found_project=1
         IFS=$'\t' read -r session_name project_root < "$project_file"
-        if [[ -n "$session_name" && -n "$project_root" ]] &&
-            ! tmux has-session -t "=$session_name" 2>/dev/null; then
-            shipyard_ensure_project_session "$project_root" "$session_name" >/dev/null || result=1
+        if [[ -z "$session_name" || -z "$project_root" ]]; then
+            rm -f "$project_file"
+            continue
         fi
-        rm -f "$project_file"
+        if tmux has-session -t "=$session_name" 2>/dev/null; then
+            rm -f "$project_file"
+            continue
+        fi
+        if shipyard_ensure_project_session "$project_root" "$session_name" >/dev/null; then
+            rm -f "$project_file"
+        else
+            result=1
+        fi
     done
 
     while IFS= read -r session_name; do
         [[ -n "$session_name" ]] || continue
-        window_id="$(shipyard_ensure_project_session \
-            "$(tmux show-options -qv -t "$session_name" @shipyard_project_root)" "$session_name")"
-        [[ -n "$target_window" ]] || target_window="$window_id"
+        if window_id="$(shipyard_ensure_project_session \
+            "$(tmux show-options -qv -t "$session_name" @shipyard_project_root)" "$session_name")"; then
+            [[ -n "$target_window" ]] || target_window="$window_id"
+        else
+            result=1
+        fi
     done < <(tmux list-sessions -F '#{?@shipyard_project_root,#{session_name},}' 2>/dev/null)
 
     if [[ -z "$target_window" ]]; then
@@ -497,10 +509,18 @@ shipyard_pause() {
     local project_root
     local window_id
     local paused=0
+    local current_session=""
+    local deferred_session=""
+    local sessions=""
+    local kill_cmd
 
     if ! command -v tmux >/dev/null 2>&1; then
         printf 'forge: tmux is not installed\n' >&2
         return 1
+    fi
+
+    if [[ -n "${TMUX_PANE:-}" ]]; then
+        current_session="$(tmux display-message -p -t "$TMUX_PANE" '#{session_name}' 2>/dev/null)" || true
     fi
 
     while IFS= read -r session_name; do
@@ -516,15 +536,31 @@ shipyard_pause() {
             -F '#{?@shipyard_worktree,#{window_id},}' 2>/dev/null)
 
         shipyard_record_project "$session_name" "$project_root"
-        tmux kill-session -t "=$session_name"
+        sessions+="${session_name}"$'\n'
+        if [[ -n "$current_session" && "$session_name" == "$current_session" ]]; then
+            deferred_session="$session_name"
+        fi
         paused=$((paused + 1))
     done < <(tmux list-sessions -F '#{?@shipyard_project_root,#{session_name},}' 2>/dev/null)
+
+    while IFS= read -r session_name; do
+        [[ -n "$session_name" ]] || continue
+        if [[ -n "$deferred_session" && "$session_name" == "$deferred_session" ]]; then
+            continue
+        fi
+        tmux kill-session -t "=$session_name"
+    done <<< "$sessions"
 
     if [[ "$paused" -eq 0 ]]; then
         printf 'forge: no open shipyard sessions to pause\n'
         return 0
     fi
     printf 'forge: paused %d shipyard session(s); run `forge open` to restore\n' "$paused"
+
+    if [[ -n "$deferred_session" ]]; then
+        printf -v kill_cmd 'tmux kill-session -t %q' "=$deferred_session"
+        tmux run-shell -b "$kill_cmd"
+    fi
 }
 
 shipyard_record_lease() {
