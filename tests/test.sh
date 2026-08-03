@@ -1833,4 +1833,80 @@ fi
 printf 'ok - forge close keeps a paused project manifest belonging to another root\n'
 rm -f "$(shipyard_project_file "$pause_close_collide_session")"
 
+rm -f "$(shipyard_state_home)"/intents/*.intent 2>/dev/null || true
+pause_intent_steal_a="$test_tmp/pause-intent-steal/a/app"
+pause_intent_steal_b="$test_tmp/pause-intent-steal/b/app"
+mkdir -p "$(dirname "$pause_intent_steal_a")" "$(dirname "$pause_intent_steal_b")"
+git init -q "$pause_intent_steal_a"
+git -C "$pause_intent_steal_a" -c user.email=test@example.com -c user.name=test \
+    commit -q --allow-empty -m initial
+git init -q "$pause_intent_steal_b"
+git -C "$pause_intent_steal_b" -c user.email=test@example.com -c user.name=test \
+    commit -q --allow-empty -m initial
+pause_intent_steal_session="$(shipyard_session_name "$(shipyard_project_root "$pause_intent_steal_a")")"
+# Durable intent for B still naming the short session (tmux loss without pause).
+shipyard_record_intent "lease-intent-steal" \
+    "$(shipyard_project_root "$pause_intent_steal_b")" \
+    "$pause_intent_steal_session" "steal work" \
+    "$pause_intent_steal_b" "shipyard:$pause_intent_steal_session:steal work" \
+    "abc123" "main"
+treehouse() {
+    case "$1" in
+        status)
+            printf '[{"path":"%s","status":"leased","lease_id":"lease-intent-steal"}]\n' \
+                "$pause_intent_steal_b"
+            ;;
+        return)
+            printf 'unexpected treehouse return during intent steal restore\n' \
+                > "$test_tmp/intent-steal-return-called"
+            ;;
+    esac
+}
+TMUX="test" shipyard_open "$pause_intent_steal_a"
+shipyard_pause >/dev/null
+if [[ ! -e "$(shipyard_project_file "$pause_intent_steal_session")" ]]; then
+    printf 'not ok - pause must record the short-name project before intent steal restore\n' >&2
+    exit 1
+fi
+restore_intent_steal_status=0
+if shipyard_restore_intent "$(shipyard_intent_file lease-intent-steal)" 2>/dev/null; then
+    printf 'not ok - intent restore must not mint a session reserved by a paused project\n' >&2
+    exit 1
+else
+    restore_intent_steal_status=$?
+fi
+if [[ "$restore_intent_steal_status" -eq 0 ]]; then
+    printf 'not ok - intent restore must fail closed when a paused project owns the name\n' >&2
+    exit 1
+fi
+if tmux has-session -t "=$pause_intent_steal_session" 2>/dev/null; then
+    printf 'not ok - intent restore must leave the paused short name free for its owner\n' >&2
+    exit 1
+fi
+if [[ ! -e "$(shipyard_intent_file lease-intent-steal)" ]]; then
+    printf 'not ok - intent restore must keep the colliding intent for a later retry\n' >&2
+    exit 1
+fi
+if [[ ! -e "$(shipyard_project_file "$pause_intent_steal_session")" ]]; then
+    printf 'not ok - intent restore must leave the paused project manifest alone\n' >&2
+    exit 1
+fi
+# A foreign live session must not be joinable via ensure for another root.
+tmux new-session -d -s "$pause_intent_steal_session" -n command -c "$pause_intent_steal_b"
+tmux set-option -t "$pause_intent_steal_session" @shipyard_project_root \
+    "$(shipyard_project_root "$pause_intent_steal_b")"
+if shipyard_ensure_project_session \
+    "$(shipyard_project_root "$pause_intent_steal_a")" \
+    "$pause_intent_steal_session" >/dev/null 2>&1; then
+    printf 'not ok - ensure must refuse a live session owned by a different project root\n' >&2
+    exit 1
+fi
+assert_equal "$(shipyard_project_root "$pause_intent_steal_b")" \
+    "$(tmux show-options -qv -t "$pause_intent_steal_session" @shipyard_project_root)" \
+    "ensure leaves a foreign session root unchanged when refusing to join"
+printf 'ok - intent restore and ensure refuse paused/foreign short-name ownership\n'
+tmux kill-session -t "=$pause_intent_steal_session" 2>/dev/null || true
+rm -f "$(shipyard_project_file "$pause_intent_steal_session")"
+shipyard_forget_intent lease-intent-steal
+
 printf 'all tests passed\n'

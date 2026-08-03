@@ -176,6 +176,7 @@ shipyard_ensure_project_session() {
     local session_name="$2"
     local repo_window_id
     local command_window_id
+    local existing_root
 
     if ! tmux has-session -t "=$session_name" 2>/dev/null; then
         if ! repo_window_id="$(tmux new-session -d -P -F '#{window_id}' \
@@ -185,6 +186,10 @@ shipyard_ensure_project_session() {
         tmux set-option -t "$session_name" @shipyard_project_root "$project_root"
         tmux set-option -w -t "$repo_window_id" @shipyard_role repo
     else
+        existing_root="$(tmux show-options -qv -t "$session_name" @shipyard_project_root 2>/dev/null)"
+        if [[ "$existing_root" != "$project_root" ]]; then
+            return 1
+        fi
         if ! repo_window_id="$(shipyard_ensure_repo_window "$session_name" "$project_root")"; then
             return 1
         fi
@@ -415,6 +420,7 @@ shipyard_restore_intent() {
     local intent_file="$1"
     local lease_id project_root session_name intent worktree lease_holder base_head base_branch agent
     local window_id top_pane_id watcher_command hint existing_root
+    local project_file paused_root
 
     IFS=$'\t' read -r lease_id project_root session_name intent worktree lease_holder \
         base_head base_branch agent < "$intent_file"
@@ -442,6 +448,15 @@ shipyard_restore_intent() {
     fi
 
     if ! tmux has-session -t "=$session_name" 2>/dev/null; then
+        project_file="$(shipyard_project_file "$session_name")"
+        if [[ -f "$project_file" ]]; then
+            IFS=$'\t' read -r _ paused_root < "$project_file"
+            if [[ -z "$paused_root" || "$paused_root" != "$project_root" ]]; then
+                printf 'forge: cannot restore %s: session %s is reserved by a paused project; leaving manifest for a later retry\n' \
+                    "$intent" "$session_name" >&2
+                return 1
+            fi
+        fi
         window_id="$(tmux new-session -d -P -F '#{window_id}' \
             -s "$session_name" -n "$intent" -c "$worktree")" || return
         tmux set-option -t "$session_name" @shipyard_project_root "$project_root"
