@@ -293,7 +293,18 @@ shipyard_record_project() {
 
 shipyard_forget_project() {
     local session_name="$1"
-    rm -f "$(shipyard_project_file "$session_name")"
+    local project_file
+    local recorded_session
+    local recorded_root
+    local live_root
+
+    project_file="$(shipyard_project_file "$session_name")"
+    [[ -f "$project_file" ]] || return 0
+    IFS=$'\t' read -r recorded_session recorded_root < "$project_file"
+    live_root="$(tmux show-options -qv -t "$session_name" @shipyard_project_root 2>/dev/null)"
+    if [[ -n "$recorded_root" && -n "$live_root" && "$recorded_root" == "$live_root" ]]; then
+        rm -f "$project_file"
+    fi
 }
 
 shipyard_snapshot_agent() {

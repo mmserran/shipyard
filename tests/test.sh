@@ -1774,4 +1774,29 @@ tmux kill-session -t "=$pause_intent_collide_session" 2>/dev/null || true
 rm -f "$(shipyard_project_file "$pause_intent_collide_session")"
 shipyard_forget_intent lease-intent-collide
 
+pause_close_collide_a="$test_tmp/pause-close-collide/a/app"
+pause_close_collide_b="$test_tmp/pause-close-collide/b/app"
+mkdir -p "$(dirname "$pause_close_collide_a")" "$(dirname "$pause_close_collide_b")"
+git init -q "$pause_close_collide_a"
+git -C "$pause_close_collide_a" -c user.email=test@example.com -c user.name=test \
+    commit -q --allow-empty -m initial
+git init -q "$pause_close_collide_b"
+git -C "$pause_close_collide_b" -c user.email=test@example.com -c user.name=test \
+    commit -q --allow-empty -m initial
+TMUX="test" shipyard_open "$pause_close_collide_a"
+pause_close_collide_session="$(shipyard_session_name "$(shipyard_project_root "$pause_close_collide_a")")"
+shipyard_pause >/dev/null
+TMUX="test" shipyard_open "$pause_close_collide_b"
+assert_equal "$(shipyard_project_root "$pause_close_collide_b")" \
+    "$(tmux show-options -qv -t "$pause_close_collide_session" @shipyard_project_root)" \
+    "a later open of a same-basename project reuses the freed short session name before close"
+pause_close_collide_command="$(shipyard_command_window "$pause_close_collide_session")"
+shipyard_close_command_window "$pause_close_collide_command"
+if [[ ! -e "$(shipyard_project_file "$pause_close_collide_session")" ]]; then
+    printf 'not ok - forge close keeps a paused project manifest belonging to another root\n' >&2
+    exit 1
+fi
+printf 'ok - forge close keeps a paused project manifest belonging to another root\n'
+rm -f "$(shipyard_project_file "$pause_close_collide_session")"
+
 printf 'all tests passed\n'
