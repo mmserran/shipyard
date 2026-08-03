@@ -1681,4 +1681,34 @@ fi
 printf 'ok - forge open keeps the project manifest when ensure fails\n'
 rm -f "$(shipyard_project_file "$pause_fail_session")"
 
+pause_collide_a="$test_tmp/pause-collide/a/app"
+pause_collide_b="$test_tmp/pause-collide/b/app"
+mkdir -p "$(dirname "$pause_collide_a")" "$(dirname "$pause_collide_b")"
+git init -q "$pause_collide_a"
+git -C "$pause_collide_a" -c user.email=test@example.com -c user.name=test \
+    commit -q --allow-empty -m initial
+git init -q "$pause_collide_b"
+git -C "$pause_collide_b" -c user.email=test@example.com -c user.name=test \
+    commit -q --allow-empty -m initial
+TMUX="test" shipyard_open "$pause_collide_a"
+pause_collide_session="$(shipyard_session_name "$(shipyard_project_root "$pause_collide_a")")"
+shipyard_pause >/dev/null
+TMUX="test" shipyard_open "$pause_collide_b"
+assert_equal "$(shipyard_project_root "$pause_collide_b")" \
+    "$(tmux show-options -qv -t "$pause_collide_session" @shipyard_project_root)" \
+    "a later open of a same-basename project reuses the freed short session name"
+restore_collide_status=0
+TMUX="test" shipyard_restore >/dev/null || restore_collide_status=$?
+if [[ "$restore_collide_status" -eq 0 ]]; then
+    printf 'not ok - forge open reports failure when a paused project name is taken by another root\n' >&2
+    exit 1
+fi
+if [[ ! -e "$(shipyard_project_file "$pause_collide_session")" ]]; then
+    printf 'not ok - forge open keeps a paused project manifest when another root holds its session name\n' >&2
+    exit 1
+fi
+printf 'ok - forge open keeps a paused project manifest when another root holds its session name\n'
+tmux kill-session -t "=$pause_collide_session" 2>/dev/null || true
+rm -f "$(shipyard_project_file "$pause_collide_session")"
+
 printf 'all tests passed\n'

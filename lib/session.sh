@@ -425,7 +425,7 @@ shipyard_restore_intent() {
 }
 
 shipyard_restore() {
-    local state_home intent_file project_file session_name project_root
+    local state_home intent_file project_file session_name project_root existing_root
     local target_window="" result=0
     local found_intent=0
     local found_project=0
@@ -452,7 +452,11 @@ shipyard_restore() {
     # durable record; a paused project's manifest is the only thing that can
     # rebuild them. Keep it on ensure failure so a later retry can still
     # recreate the session; drop it only after a successful ensure, when the
-    # session already exists, or when the record is corrupt.
+    # live session belongs to this same project root, or when the record is
+    # corrupt. A basename collision with a different (or unmarked) session
+    # must keep the file — pause frees short names that
+    # shipyard_session_for_project will hand to another project without
+    # consulting paused manifests.
     for project_file in "$state_home"/projects/*.project; do
         [[ -e "$project_file" ]] || continue
         found_project=1
@@ -462,7 +466,12 @@ shipyard_restore() {
             continue
         fi
         if tmux has-session -t "=$session_name" 2>/dev/null; then
-            rm -f "$project_file"
+            existing_root="$(tmux show-options -qv -t "$session_name" @shipyard_project_root 2>/dev/null)"
+            if [[ "$existing_root" == "$project_root" ]]; then
+                rm -f "$project_file"
+            else
+                result=1
+            fi
             continue
         fi
         if shipyard_ensure_project_session "$project_root" "$session_name" >/dev/null; then
