@@ -362,7 +362,7 @@ shipyard_resume_hint() {
 shipyard_restore_intent() {
     local intent_file="$1"
     local lease_id project_root session_name intent worktree lease_holder base_head base_branch agent
-    local window_id top_pane_id watcher_command hint
+    local window_id top_pane_id watcher_command hint existing_root
 
     IFS=$'\t' read -r lease_id project_root session_name intent worktree lease_holder \
         base_head base_branch agent < "$intent_file"
@@ -394,6 +394,12 @@ shipyard_restore_intent() {
             -s "$session_name" -n "$intent" -c "$worktree")" || return
         tmux set-option -t "$session_name" @shipyard_project_root "$project_root"
     else
+        existing_root="$(tmux show-options -qv -t "$session_name" @shipyard_project_root 2>/dev/null)"
+        if [[ "$existing_root" != "$project_root" ]]; then
+            printf 'forge: cannot restore %s: session %s belongs to a different project; leaving manifest for a later retry\n' \
+                "$intent" "$session_name" >&2
+            return 1
+        fi
         while IFS= read -r window_id; do
             [[ -n "$window_id" ]] || continue
             if [[ "$(tmux show-options -wqv -t "$window_id" @shipyard_lease_id)" == "$lease_id" ]]; then

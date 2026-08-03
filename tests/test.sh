@@ -1711,4 +1711,67 @@ printf 'ok - forge open keeps a paused project manifest when another root holds 
 tmux kill-session -t "=$pause_collide_session" 2>/dev/null || true
 rm -f "$(shipyard_project_file "$pause_collide_session")"
 
+rm -f "$(shipyard_state_home)"/intents/*.intent 2>/dev/null || true
+pause_intent_collide_a="$test_tmp/pause-intent-collide/a/app"
+pause_intent_collide_b="$test_tmp/pause-intent-collide/b/app"
+mkdir -p "$(dirname "$pause_intent_collide_a")" "$(dirname "$pause_intent_collide_b")"
+git init -q "$pause_intent_collide_a"
+git -C "$pause_intent_collide_a" -c user.email=test@example.com -c user.name=test \
+    commit -q --allow-empty -m initial
+git init -q "$pause_intent_collide_b"
+git -C "$pause_intent_collide_b" -c user.email=test@example.com -c user.name=test \
+    commit -q --allow-empty -m initial
+TMUX="test" shipyard_open "$pause_intent_collide_a"
+pause_intent_collide_session="$(shipyard_session_name "$(shipyard_project_root "$pause_intent_collide_a")")"
+pause_intent_collide_window="$(tmux new-window -d -P -F '#{window_id}' \
+    -t "=$pause_intent_collide_session:" -n "collide work" -c "$pause_intent_collide_a")"
+tmux set-option -w -t "$pause_intent_collide_window" @shipyard_worktree "$pause_intent_collide_a"
+tmux set-option -w -t "$pause_intent_collide_window" @shipyard_lease_id "lease-intent-collide"
+tmux set-option -w -t "$pause_intent_collide_window" @shipyard_base_head "abc123"
+tmux set-option -w -t "$pause_intent_collide_window" @shipyard_base_branch "main"
+shipyard_record_lease "$pause_intent_collide_window" "$pause_intent_collide_a" \
+    "lease-intent-collide" "shipyard:$pause_intent_collide_session:collide work"
+shipyard_record_intent "lease-intent-collide" \
+    "$(shipyard_project_root "$pause_intent_collide_a")" \
+    "$pause_intent_collide_session" "collide work" \
+    "$pause_intent_collide_a" "shipyard:$pause_intent_collide_session:collide work" \
+    "abc123" "main"
+treehouse() {
+    case "$1" in
+        status)
+            printf '[{"path":"%s","status":"leased","lease_id":"lease-intent-collide"}]\n' \
+                "$pause_intent_collide_a"
+            ;;
+        return)
+            printf 'unexpected treehouse return during intent collision restore\n' \
+                > "$test_tmp/intent-collide-return-called"
+            ;;
+    esac
+}
+shipyard_pause >/dev/null
+TMUX="test" shipyard_open "$pause_intent_collide_b"
+assert_equal "$(shipyard_project_root "$pause_intent_collide_b")" \
+    "$(tmux show-options -qv -t "$pause_intent_collide_session" @shipyard_project_root)" \
+    "a later open of a same-basename project reuses the freed short session name for intent collision"
+restore_intent_collide_status=0
+TMUX="test" shipyard_restore >/dev/null || restore_intent_collide_status=$?
+if [[ "$restore_intent_collide_status" -eq 0 ]]; then
+    printf 'not ok - forge open reports failure when a paused intent name is taken by another root\n' >&2
+    exit 1
+fi
+misplaced_intent="$(tmux list-windows -t "=$pause_intent_collide_session" \
+    -F '#{@shipyard_lease_id}' 2>/dev/null | grep -c '^lease-intent-collide$' || true)"
+if [[ "$misplaced_intent" -ne 0 ]]; then
+    printf 'not ok - forge open must not restore a paused intent into another project session\n' >&2
+    exit 1
+fi
+if [[ ! -e "$(shipyard_intent_file lease-intent-collide)" ]]; then
+    printf 'not ok - forge open keeps a paused intent manifest when another root holds its session name\n' >&2
+    exit 1
+fi
+printf 'ok - forge open keeps a paused intent when another root holds its session name\n'
+tmux kill-session -t "=$pause_intent_collide_session" 2>/dev/null || true
+rm -f "$(shipyard_project_file "$pause_intent_collide_session")"
+shipyard_forget_intent lease-intent-collide
+
 printf 'all tests passed\n'
