@@ -1471,4 +1471,150 @@ case "$restore_empty_output" in
         ;;
 esac
 
+pause_no_sessions_output="$(shipyard_pause)"
+assert_equal "forge: no open shipyard sessions to pause" "$pause_no_sessions_output" \
+    "forge pause reports when there is nothing open"
+
+pause_repo="$test_tmp/pause-repo"
+git init -q "$pause_repo"
+git -C "$pause_repo" -c user.email=test@example.com -c user.name=test \
+    commit -q --allow-empty -m initial
+TMUX="test" shipyard_open "$pause_repo"
+pause_session="$(shipyard_session_name "$(shipyard_project_root "$pause_repo")")"
+
+treehouse() {
+    case "$1" in
+        status)
+            printf '[{"path":"%s","status":"leased","lease_id":"lease-pause"}]\n' "$pause_repo"
+            ;;
+        return)
+            printf 'unexpected treehouse return during pause test\n' > "$test_tmp/pause-return-called"
+            ;;
+    esac
+}
+
+pause_intent_window="$(tmux new-window -d -P -F '#{window_id}' \
+    -t "=$pause_session:" -n "pause work" -c "$pause_repo")"
+tmux set-option -w -t "$pause_intent_window" @shipyard_worktree "$pause_repo"
+tmux set-option -w -t "$pause_intent_window" @shipyard_lease_id "lease-pause"
+tmux set-option -w -t "$pause_intent_window" @shipyard_base_head "abc123"
+tmux set-option -w -t "$pause_intent_window" @shipyard_base_branch "main"
+shipyard_record_lease "$pause_intent_window" "$pause_repo" "lease-pause" \
+    "shipyard:$pause_session:pause work"
+shipyard_record_intent "lease-pause" "$pause_repo" "$pause_session" "pause work" \
+    "$pause_repo" "shipyard:$pause_session:pause work" "abc123" "main"
+
+pause_output="$(shipyard_pause)"
+case "$pause_output" in
+    *"paused 1 shipyard session"*)
+        printf 'ok - forge pause reports how many sessions it paused\n'
+        ;;
+    *)
+        printf 'not ok - forge pause reports how many sessions it paused\n%s\n' "$pause_output" >&2
+        exit 1
+        ;;
+esac
+
+if tmux has-session -t "=$pause_session" 2>/dev/null; then
+    printf 'not ok - forge pause closes the session\n' >&2
+    exit 1
+fi
+printf 'ok - forge pause closes the session\n'
+
+if [[ -e "$(shipyard_state_home)/windows/lease-pause.lease" ]]; then
+    printf "not ok - forge pause disarms the intent window's lease record\n" >&2
+    exit 1
+fi
+printf "ok - forge pause disarms the intent window's lease record\n"
+
+if [[ ! -e "$(shipyard_intent_file lease-pause)" ]]; then
+    printf 'not ok - forge pause preserves the intent manifest\n' >&2
+    exit 1
+fi
+printf 'ok - forge pause preserves the intent manifest\n'
+
+if [[ ! -e "$(shipyard_project_file "$pause_session")" ]]; then
+    printf 'not ok - forge pause records the repository even for a session with intents\n' >&2
+    exit 1
+fi
+printf 'ok - forge pause records the repository even for a session with intents\n'
+
+shipyard_reap "$pause_intent_window"
+if [[ -e "$test_tmp/pause-return-called" ]]; then
+    printf 'not ok - a reap queued against a paused window never returns its still-active lease\n' >&2
+    exit 1
+fi
+printf 'ok - a reap queued against a paused window never returns its still-active lease\n'
+
+shipyard_restore >/dev/null
+restored_pause_window="$(tmux list-windows -t "=$pause_session" \
+    -F '#{@shipyard_lease_id} #{window_id}' 2>/dev/null |
+    awk '$1 == "lease-pause" {print $2; exit}')"
+if [[ -z "$restored_pause_window" ]]; then
+    printf 'not ok - forge open restores a paused intent window\n' >&2
+    exit 1
+fi
+printf 'ok - forge open restores a paused intent window\n'
+
+if [[ -z "$(shipyard_command_window "$pause_session")" ||
+    -z "$(shipyard_repo_window "$pause_session")" ]]; then
+    printf "not ok - forge open restores the paused repository's repo and command windows too\n" >&2
+    exit 1
+fi
+printf "ok - forge open restores the paused repository's repo and command windows too\n"
+
+if [[ -e "$(shipyard_project_file "$pause_session")" ]]; then
+    printf 'not ok - forge open consumes the project manifest once a session is restored\n' >&2
+    exit 1
+fi
+printf 'ok - forge open consumes the project manifest once a session is restored\n'
+
+tmux kill-session -t "=$pause_session" 2>/dev/null || true
+shipyard_forget_lease "$restored_pause_window"
+rm -f "$test_tmp/pause-return-called"
+
+pause2_repo="$test_tmp/pause-repo-2"
+git init -q "$pause2_repo"
+git -C "$pause2_repo" -c user.email=test@example.com -c user.name=test \
+    commit -q --allow-empty -m initial
+TMUX="test" shipyard_open "$pause2_repo"
+pause2_session="$(shipyard_session_name "$(shipyard_project_root "$pause2_repo")")"
+
+shipyard_pause >/dev/null
+
+if tmux has-session -t "=$pause2_session" 2>/dev/null; then
+    printf 'not ok - forge pause closes a repo/command-only session too\n' >&2
+    exit 1
+fi
+printf 'ok - forge pause closes a repo/command-only session too\n'
+
+if [[ ! -e "$(shipyard_project_file "$pause2_session")" ]]; then
+    printf 'not ok - forge pause records a repo/command-only session for later restore\n' >&2
+    exit 1
+fi
+printf 'ok - forge pause records a repo/command-only session for later restore\n'
+
+shipyard_restore >/dev/null
+
+if ! tmux has-session -t "=$pause2_session" 2>/dev/null; then
+    printf 'not ok - forge open recreates a paused repo/command-only session\n' >&2
+    exit 1
+fi
+printf 'ok - forge open recreates a paused repo/command-only session\n'
+
+if [[ -z "$(shipyard_command_window "$pause2_session")" ||
+    -z "$(shipyard_repo_window "$pause2_session")" ]]; then
+    printf 'not ok - forge open recreates both windows of a paused repo/command-only session\n' >&2
+    exit 1
+fi
+printf 'ok - forge open recreates both windows of a paused repo/command-only session\n'
+
+if [[ -e "$(shipyard_project_file "$pause2_session")" ]]; then
+    printf 'not ok - forge open consumes the repo/command-only project manifest\n' >&2
+    exit 1
+fi
+printf 'ok - forge open consumes the repo/command-only project manifest\n'
+
+tmux kill-session -t "=$pause2_session" 2>/dev/null || true
+
 printf 'all tests passed\n'

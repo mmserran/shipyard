@@ -39,6 +39,10 @@ Usage:
                        closes every intent and the whole repository session.
                        The Yazi repo window is protected from forge close
 
+  forge pause         Save the state of every open shipyard repo/intent
+                       window and close all of them, without returning any
+                       Treehouse lease. forge open restores everything
+
   forge publish-screenshot <file> [<file> ...]
                        Upload screenshot(s) to a rolling GitHub Release and
                        print PR-ready markdown image links
@@ -75,6 +79,10 @@ main() {
 
         close)
             shipyard_close
+            ;;
+
+        pause)
+            shipyard_pause
             ;;
 
         publish-screenshot)

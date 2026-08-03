@@ -122,28 +122,19 @@ shipyard_ensure_repo_window() {
     printf '%s\n' "$repo_window_id"
 }
 
+# Creates (or reuses) a project's tmux session, Yazi repo window, and command
+# window, without attaching. Shared by shipyard_open and every restore path
+# (`forge open` with no path, recreating a session `forge pause` tore down)
+# so both stay in lockstep on how a project's windows are structured.
+#
 # Unlike `forge new`, these windows are not leased from Treehouse and carry no
 # intent metadata or watcher. The repo window runs Yazi at the project root;
 # the command window remains a plain shell for repository-wide commands.
-shipyard_open() {
-    local requested_path="${1:-.}"
-    local project_root
-    local session_name
+shipyard_ensure_project_session() {
+    local project_root="$1"
+    local session_name="$2"
     local repo_window_id
     local command_window_id
-    local window_id
-
-    project_root="$(shipyard_project_root "$requested_path")" || return
-    if ! command -v tmux >/dev/null 2>&1; then
-        printf 'forge: tmux is not installed\n' >&2
-        return 1
-    fi
-    if ! command -v yazi >/dev/null 2>&1; then
-        printf 'forge: yazi is not installed\n' >&2
-        return 1
-    fi
-
-    session_name="$(shipyard_session_for_project "$project_root")"
 
     if ! tmux has-session -t "=$session_name" 2>/dev/null; then
         if ! repo_window_id="$(tmux new-session -d -P -F '#{window_id}' \
@@ -169,8 +160,28 @@ shipyard_open() {
 
     shipyard_refresh_window_context "$command_window_id"
     shipyard_refresh_intent_numbers "$session_name"
+    printf '%s\n' "$command_window_id"
+}
 
-    window_id="$command_window_id"
+shipyard_open() {
+    local requested_path="${1:-.}"
+    local project_root
+    local session_name
+    local window_id
+
+    project_root="$(shipyard_project_root "$requested_path")" || return
+    if ! command -v tmux >/dev/null 2>&1; then
+        printf 'forge: tmux is not installed\n' >&2
+        return 1
+    fi
+    if ! command -v yazi >/dev/null 2>&1; then
+        printf 'forge: yazi is not installed\n' >&2
+        return 1
+    fi
+
+    session_name="$(shipyard_session_for_project "$project_root")"
+    window_id="$(shipyard_ensure_project_session "$project_root" "$session_name")" || return 1
+
     if [[ -n "${TMUX:-}" ]]; then
         tmux switch-client -t "$window_id"
     else
@@ -253,6 +264,36 @@ shipyard_record_intent() {
 shipyard_forget_intent() {
     local lease_id="$1"
     rm -f "$(shipyard_intent_file "$lease_id")"
+}
+
+shipyard_project_file() {
+    local session_name="$1"
+    printf '%s/projects/%s.project\n' "$(shipyard_state_home)" "$session_name"
+}
+
+# Durable record of a paused session's repository identity. Intent manifests
+# already survive tmux loss on their own, so they cover intent windows; a
+# repo/command-only session (no intents yet) has nothing else recording that
+# it existed, so `forge pause` writes this and `forge open` consumes it to
+# recreate exactly those two windows.
+shipyard_record_project() {
+    local session_name="$1"
+    local project_root="$2"
+    local state_home
+    local project_file
+    local temporary_file
+
+    state_home="$(shipyard_state_home)"
+    mkdir -p "$state_home/projects"
+    project_file="$(shipyard_project_file "$session_name")"
+    temporary_file="${project_file}.tmp.$$"
+    printf '%s\t%s\n' "$session_name" "$project_root" > "$temporary_file"
+    mv -f "$temporary_file" "$project_file"
+}
+
+shipyard_forget_project() {
+    local session_name="$1"
+    rm -f "$(shipyard_project_file "$session_name")"
 }
 
 shipyard_snapshot_agent() {
@@ -384,8 +425,11 @@ shipyard_restore_intent() {
 }
 
 shipyard_restore() {
-    local state_home intent_file session_name target_window="" result=0
+    local state_home intent_file project_file session_name project_root
+    local target_window="" result=0
     local found_intent=0
+    local found_project=0
+    local window_id
 
     state_home="$(shipyard_state_home)"
     for dependency in tmux treehouse yazi; do
@@ -394,7 +438,8 @@ shipyard_restore() {
             return 1
         fi
     done
-    mkdir -p "$state_home/intents"
+    mkdir -p "$state_home/intents" "$state_home/projects"
+
     for intent_file in "$state_home"/intents/*.intent; do
         [[ -e "$intent_file" ]] || continue
         found_intent=1
@@ -402,16 +447,32 @@ shipyard_restore() {
             result=1
         fi
     done
+
+    # Repo/command-only sessions (no intents of their own) have no other
+    # durable record; a paused project's manifest is the only thing that can
+    # rebuild them. A session an intent already recreated above just gets its
+    # manifest cleared here without any further action.
+    for project_file in "$state_home"/projects/*.project; do
+        [[ -e "$project_file" ]] || continue
+        found_project=1
+        IFS=$'\t' read -r session_name project_root < "$project_file"
+        if [[ -n "$session_name" && -n "$project_root" ]] &&
+            ! tmux has-session -t "=$session_name" 2>/dev/null; then
+            shipyard_ensure_project_session "$project_root" "$session_name" >/dev/null || result=1
+        fi
+        rm -f "$project_file"
+    done
+
     while IFS= read -r session_name; do
         [[ -n "$session_name" ]] || continue
-        shipyard_ensure_repo_window "$session_name" \
-            "$(tmux show-options -qv -t "$session_name" @shipyard_project_root)" >/dev/null || true
-        shipyard_refresh_intent_numbers "$session_name"
-        [[ -n "$target_window" ]] || target_window="$(shipyard_command_window "$session_name")"
-        [[ -n "$target_window" ]] || target_window="$(shipyard_repo_window "$session_name")"
+        window_id="$(shipyard_ensure_project_session \
+            "$(tmux show-options -qv -t "$session_name" @shipyard_project_root)" "$session_name")"
+        [[ -n "$target_window" ]] || target_window="$window_id"
     done < <(tmux list-sessions -F '#{?@shipyard_project_root,#{session_name},}' 2>/dev/null)
+
     if [[ -z "$target_window" ]]; then
-        [[ "$found_intent" -eq 1 ]] || printf 'forge: no prior sessions; pass a path to open a project (forge open <path>)\n'
+        [[ "$found_intent" -eq 1 || "$found_project" -eq 1 ]] ||
+            printf 'forge: no prior sessions; pass a path to open a project (forge open <path>)\n'
         return "$result"
     fi
     if [[ -n "${TMUX:-}" ]]; then
@@ -420,6 +481,50 @@ shipyard_restore() {
         tmux attach-session -t "$target_window"
     fi
     return "$result"
+}
+
+# Saves everything needed to fully recreate every open shipyard session, then
+# tears them down. Intent windows are already durable via their manifest
+# (refreshed here so the resume hint reflects the latest observed agent); a
+# repository's plain repo/command windows are not durable anywhere else, so
+# their identity is recorded too. Each intent window's lease record is
+# disarmed before the session dies, so the window-unlinked hook's later
+# `forge reap` has nothing to return -- the lease stays active in Treehouse
+# throughout, and `forge open` rebuilds a fresh lease record for the window
+# it recreates.
+shipyard_pause() {
+    local session_name
+    local project_root
+    local window_id
+    local paused=0
+
+    if ! command -v tmux >/dev/null 2>&1; then
+        printf 'forge: tmux is not installed\n' >&2
+        return 1
+    fi
+
+    while IFS= read -r session_name; do
+        [[ -n "$session_name" ]] || continue
+        project_root="$(tmux show-options -qv -t "$session_name" @shipyard_project_root)"
+        [[ -n "$project_root" ]] || continue
+
+        while IFS= read -r window_id; do
+            [[ -n "$window_id" ]] || continue
+            shipyard_snapshot_agent "$window_id"
+            shipyard_disarm_lease "$window_id"
+        done < <(tmux list-windows -t "=$session_name" \
+            -F '#{?@shipyard_worktree,#{window_id},}' 2>/dev/null)
+
+        shipyard_record_project "$session_name" "$project_root"
+        tmux kill-session -t "=$session_name"
+        paused=$((paused + 1))
+    done < <(tmux list-sessions -F '#{?@shipyard_project_root,#{session_name},}' 2>/dev/null)
+
+    if [[ "$paused" -eq 0 ]]; then
+        printf 'forge: no open shipyard sessions to pause\n'
+        return 0
+    fi
+    printf 'forge: paused %d shipyard session(s); run `forge open` to restore\n' "$paused"
 }
 
 shipyard_record_lease() {
@@ -453,6 +558,25 @@ shipyard_forget_lease() {
             rm -f "$lease_file"
             shipyard_forget_intent "$lease_id"
         fi
+    done
+    return 0
+}
+
+# Removes just a window's lease-tracking record, leaving its intent manifest
+# in place -- unlike shipyard_forget_lease, which also forgets the intent.
+# `forge pause` calls this before tearing a window down so the window-unlinked
+# hook's later `forge reap` finds no matching record and leaves the Treehouse
+# lease alone, while the intent it's paired with survives for `forge open` to
+# rebuild a fresh lease record around.
+shipyard_disarm_lease() {
+    local window_id="$1"
+    local lease_file
+    local recorded_window_id
+
+    for lease_file in "$(shipyard_state_home)/windows"/*.lease; do
+        [[ -e "$lease_file" ]] || continue
+        IFS=$'\t' read -r recorded_window_id _ < "$lease_file"
+        [[ "$recorded_window_id" == "$window_id" ]] && rm -f "$lease_file"
     done
     return 0
 }
@@ -741,6 +865,7 @@ shipyard_close_command_window() {
         tmux switch-client -t "$next_window"
     fi
 
+    shipyard_forget_project "$session_name"
     tmux kill-session -t "=$session_name"
 }
 

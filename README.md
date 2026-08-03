@@ -115,6 +115,19 @@ forge open ~/.config/shipyard
 forge open portfolio/mserrano.net-web-services
 ```
 
+## Pause and resume
+
+```bash
+forge pause
+```
+
+Saves the state of every open shipyard repository and intent window, then
+closes all of them: every session, its Yazi repo window, its command window,
+and every leased intent window. Nothing is discarded and no Treehouse lease is
+returned — worktrees, uncommitted changes, and leases stay exactly as they
+were. Run `forge open` with no path afterward to restore every one of them,
+the same way it recovers from a reboot.
+
 ## Restore after a reboot
 
 ```bash
@@ -123,12 +136,14 @@ forge open
 
 `forge open` with no path doesn't open a project — it restores every leased
 intent window instead. Shipyard stores a durable manifest for every active
-intent. After a reboot or other tmux server loss, this verifies that each
+intent, plus a manifest for each repository `forge pause` saved. After a
+reboot, `forge pause`, or other tmux server loss, this verifies that each
 exact Treehouse lease is still active, recreates the repository sessions and
-standard two-pane intent windows, restarts their watchers, and attaches to the
-recovered sessions. It never silently substitutes a new lease when the
-original one is gone, and it never silently opens the current directory as a
-project either — pass a path (even `.`) for that.
+standard two-pane intent windows, restarts their watchers, rebuilds any
+repo/command windows a pause saved, and attaches to the recovered sessions. It
+never silently substitutes a new lease when the original one is gone, and it
+never silently opens the current directory as a project either — pass a path
+(even `.`) for that.
 The watcher automatically backfills manifests for intent windows created by an
 older Shipyard version, so they become recoverable after upgrading too.
 
@@ -229,6 +244,7 @@ forge open [path]  # open/create the repo's Yazi and command windows
 forge open        # no path: restore active intent windows after a reboot
 forge new <intent>
 forge close  # close one intent, or the whole repo from its command window
+forge pause  # save and close every open repo/intent window, keeping leases
 forge build  # manually override the state to building
 forge alert
 forge status
@@ -244,10 +260,10 @@ automatic state management.
 - `bin/forge` routes the CLI.
 - `shell/bash.sh` sets up a Shipyard shell, including the exit() guard that
   protects an intent window's lease from an accidental close.
-- `lib/session.sh` creates project sessions, leases worktrees, restores
-  intent windows after tmux loss (`forge open` with no path), force-closes
-  windows (`forge close`), and records lease cleanup plus durable intent
-  manifests.
+- `lib/session.sh` creates project sessions, leases worktrees, saves and
+  closes every open window (`forge pause`), restores them after tmux loss or
+  a pause (`forge open` with no path), force-closes windows (`forge close`),
+  and records lease cleanup plus durable intent and project manifests.
 - `lib/context.sh` maintains pane repository and branch context.
 - `lib/pipeline.sh` maps effective states to tmux badges.
 - `lib/watcher.sh` derives validation and PR states, snapshots the observed
