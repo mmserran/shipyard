@@ -407,6 +407,7 @@ shipyard_snapshot_agent() {
 
 shipyard_lease_is_current() {
     local lease_id="$1"
+    local project_root="$2"
     local status_json
 
     # Exit codes are not interchangeable: 1 means the probe succeeded and
@@ -415,7 +416,13 @@ shipyard_lease_is_current() {
     # Callers that wipe durable state on "not current" must treat these
     # differently, or a transient treehouse failure during bare `forge open`
     # (restore) would permanently destroy the manifests it exists to preserve.
-    status_json="$(treehouse status --json 2>/dev/null)" || return 2
+    #
+    # `treehouse status` resolves its pool via `git rev-parse
+    # --show-toplevel` in the current directory, so it must run from inside
+    # the project it's checking -- bare `forge open` runs wherever the shell
+    # happens to be (e.g. $HOME right after a reboot), which is almost never
+    # inside one of the repos being restored.
+    status_json="$(cd "$project_root" 2>/dev/null && treehouse status --json 2>/dev/null)" || return 2
     grep -Fq '"lease_id":"'"$lease_id"'"' <<<"$status_json"
 }
 
@@ -445,7 +452,7 @@ shipyard_restore_intent() {
     [[ "$agent" == "-" ]] && agent=""
 
     local lease_status=0
-    shipyard_lease_is_current "$lease_id" || lease_status=$?
+    shipyard_lease_is_current "$lease_id" "$project_root" || lease_status=$?
     if [[ "$lease_status" -eq 2 ]]; then
         printf 'forge: cannot restore %s: could not confirm Treehouse lease %s status; leaving manifest for a later retry\n' \
             "$intent" "$lease_id" >&2
