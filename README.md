@@ -272,7 +272,7 @@ automatic state management.
   agent for restore hints, and flags a worktree's uncommitted-changes status
   for the status bar.
 - `lib/screenshot.sh` publishes PR-safe visual evidence and self-heals local
-  screenshot links left in a PR body.
+  screenshot references left in a PR body.
 - `skills/publish-screenshots/SKILL.md` teaches agents when local visual
   evidence must be published.
 - `tmux.conf` renders state and defines navigation and cleanup hooks.
