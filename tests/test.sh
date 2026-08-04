@@ -1434,6 +1434,33 @@ fi
 printf 'ok - restore preserves manifest and lease record when the probe fails transiently\n'
 rm -f "$(shipyard_intent_file lease-unknown)" "$(shipyard_state_home)/windows/lease-unknown.lease"
 
+# treehouse resolves its pool from the working directory (git rev-parse
+# --show-toplevel), so bare `forge open` -- run wherever the shell happens to
+# land after a reboot, not necessarily inside any restored project -- must
+# probe each lease from that intent's own project root.
+treehouse() {
+    if [[ "$1" == "status" && "$2" == "--json" ]]; then
+        if [[ "$PWD" == "$test_tmp" ]]; then
+            printf '[{"path":"%s","status":"leased","lease_id":"lease-cwd"}]\n' "$test_tmp"
+        else
+            return 1
+        fi
+    fi
+}
+shipyard_record_intent "lease-cwd" "$test_tmp" "cwd-restore" "cwd intent" \
+    "$test_tmp" "shipyard:cwd-restore:cwd intent" "base" "development"
+shipyard_record_lease "@cwd-restore" "$test_tmp" "lease-cwd" \
+    "shipyard:cwd-restore:cwd intent"
+cwd_restore_status=0
+( cd /tmp && shipyard_restore_intent "$(shipyard_intent_file lease-cwd)" ) || cwd_restore_status=$?
+if [[ "$cwd_restore_status" -ne 0 ]]; then
+    printf 'not ok - restore probes the lease from the intent'"'"'s own project root, not the caller'"'"'s cwd\n' >&2
+    exit 1
+fi
+printf 'ok - restore probes the lease from the intent'"'"'s own project root, not the caller'"'"'s cwd\n'
+tmux kill-session -t cwd-restore 2>/dev/null || true
+rm -f "$(shipyard_intent_file lease-cwd)" "$(shipyard_state_home)/windows/lease-cwd.lease"
+
 tmux new-session -d -s legacy-restore -n legacy -c "$test_tmp"
 legacy_window="$(tmux display-message -p -t legacy-restore '#{window_id}')"
 tmux set-option -t legacy-restore @shipyard_project_root "$test_tmp"
