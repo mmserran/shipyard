@@ -1322,6 +1322,24 @@ assert_equal "1" "$(wc -c < "$autofix_publish_calls_file")" \
     "autofix uploads a repeated local file only once"
 
 autofix_edit_body=""
+: > "$autofix_publish_calls_file"
+printf '0' > "$autofix_view_count_file"
+autofix_pr_body='- Evidence: Rendered page (local file: <code>artifacts/after.png</code>)'
+screenshot_autofix_pr_body "$autofix_worktree" "42"
+assert_equal \
+    '- Evidence: Rendered page ![after.png](https://example.test/hosted/after.png)' \
+    "$autofix_edit_body" \
+    "autofix embeds no-mistakes local-file evidence annotations"
+
+autofix_edit_body=""
+: > "$autofix_publish_calls_file"
+printf '0' > "$autofix_view_count_file"
+autofix_pr_body='![after](artifacts/after.png) (local file: <code>artifacts/after.png</code>)'
+screenshot_autofix_pr_body "$autofix_worktree" "42"
+assert_equal "1" "$(wc -c < "$autofix_publish_calls_file")" \
+    "autofix publishes a file shared by Markdown and evidence annotation once"
+
+autofix_edit_body=""
 printf '0' > "$autofix_view_count_file"
 autofix_pr_body="![file-uri](file://$autofix_worktree/artifacts/after.png)"
 screenshot_autofix_pr_body "$autofix_worktree" "42"
