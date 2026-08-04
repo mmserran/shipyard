@@ -77,13 +77,15 @@ screenshot_publish() {
 # Self-heals a PR body that still points at local screenshot files: GitHub
 # can't render `file://`, absolute, or workspace-relative image links, and
 # agents don't reliably remember to publish evidence before handing off to
-# no-mistakes. Uploads each local image it can find on disk and rewrites the
-# body in place. Idempotent -- once a link is hosted it no longer matches, so
-# calling this every watcher poll is safe.
+# no-mistakes. Handles both Markdown images and no-mistakes' generated
+# `(local file: <code>...</code>)` evidence annotations. Uploads each local
+# image it can find on disk and rewrites the body in place. Idempotent -- once
+# a link is hosted it no longer matches, so calling this every watcher poll is
+# safe.
 screenshot_autofix_pr_body() {
     local worktree="$1"
     local pr="$2"
-    local body current_body new_body image target resolved line url changed prefix suffix
+    local body current_body new_body image marker target resolved line url changed prefix suffix
     local -A uploaded=()
 
     body="$(gh pr view "$pr" --json body --jq .body 2>/dev/null)" || return 0
@@ -111,17 +113,48 @@ screenshot_autofix_pr_body() {
         [[ "$resolved" == /* ]] || resolved="$worktree/$resolved"
         [[ -f "$resolved" ]] || continue
 
-        if [[ -z "${uploaded[$target]:-}" ]]; then
+        if [[ -z "${uploaded[$resolved]:-}" ]]; then
             line="$(cd "$worktree" && screenshot_publish "$resolved" 2>/dev/null)" || continue
             url="${line#*(}"
             url="${url%)*}"
             [[ -n "$url" ]] || continue
-            uploaded[$target]="$url"
+            uploaded[$resolved]="$url"
         fi
 
         suffix="$target)"
         prefix="${image%"$suffix"}"
-        new_body="${new_body//"$image"/"$prefix${uploaded[$target]})"}"
+        new_body="${new_body//"$image"/"$prefix${uploaded[$resolved]})"}"
+        changed=1
+    done <<<"$targets"
+
+    # no-mistakes renders browser evidence as prose followed by a local-file
+    # annotation rather than Markdown image syntax. Turn that annotation into
+    # an embedded hosted image while its temporary evidence file still exists.
+    targets="$(grep -oE '\(local file: <code>[^<]+</code>\)' <<<"$body" | sort -u || true)"
+
+    while IFS= read -r marker; do
+        [[ -n "$marker" ]] || continue
+        target="${marker#\(local file: <code>}"
+        target="${target%</code>\)}"
+        case "${target,,}" in
+            *.png|*.jpg|*.jpeg|*.gif|*.webp|*.bmp|*.svg) ;;
+            *) continue ;;
+        esac
+
+        resolved="${target#file://}"
+        [[ "$resolved" == /* ]] || resolved="$worktree/$resolved"
+        [[ -f "$resolved" ]] || continue
+
+        if [[ -z "${uploaded[$resolved]:-}" ]]; then
+            line="$(cd "$worktree" && screenshot_publish "$resolved" 2>/dev/null)" || continue
+            url="${line#*(}"
+            url="${url%)*}"
+            [[ -n "$url" ]] || continue
+            uploaded[$resolved]="$url"
+        fi
+
+        line="![${resolved##*/}](${uploaded[$resolved]})"
+        new_body="${new_body//"$marker"/$line}"
         changed=1
     done <<<"$targets"
 

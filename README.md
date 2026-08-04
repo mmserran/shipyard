@@ -231,10 +231,12 @@ history.
 
 As a safety net, the window watcher also self-heals a PR body once it appears:
 any `file://`, absolute, or workspace-relative image link it can resolve on
-disk gets published and swapped for its hosted URL automatically, so a missed
-manual publish before a no-mistakes run doesn't leave dead links in the PR
-body. This is only a backstop for image links in the body; publish up front
-because it does not repair PR comments or non-image local links.
+disk gets published and swapped for its hosted URL automatically. It also
+turns no-mistakes' generated `(local file: <code>...</code>)` screenshot
+evidence into an embedded hosted image as soon as the watcher sees the PR, so
+a missed manual publish before a run doesn't leave dead links in the PR body.
+This is only a backstop for images in the body; publish up front because it
+does not repair PR comments or non-image local links.
 
 ## Commands
 
