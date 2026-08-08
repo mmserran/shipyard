@@ -74,6 +74,43 @@ screenshot_publish() {
     done
 }
 
+# `gh pr edit --body` fails outright on every call: it re-fetches the full PR
+# via a GraphQL query that still asks for the classic-Projects `projectCards`
+# field, and GitHub's backend now rejects that field unconditionally since
+# Projects (classic) was fully sunset -- so the whole mutation errors out
+# before the body edit ever takes effect, regardless of gh version quirks or
+# anything about the edit itself. This has been silently true on every
+# `gh pr edit` call this tool makes; screenshot_autofix_pr_body swallowed the
+# failure (`>/dev/null 2>&1`), so the self-heal always looked like it ran but
+# never actually persisted. The REST endpoint doesn't touch that field.
+#
+# `-f key=@file`/`-f key=@-` (read the value from a file/stdin) is a newer gh
+# feature -- confirmed absent on gh 2.4.0 (2022), where it's taken literally
+# ("@-" ends up as the PR body, verbatim). `-f key=value` with the value
+# passed directly as an argument JSON-encodes it internally and works on that
+# same old version, so pass the body that way instead of trying to stream it.
+screenshot_edit_pr_body() {
+    local worktree="$1"
+    local pr="$2"
+    local body="$3"
+    local repo pr_number
+
+    case "$pr" in
+        https://github.com/*/pull/*)
+            repo="${pr#https://github.com/}"
+            pr_number="${repo##*/pull/}"
+            repo="${repo%%/pull/*}"
+            ;;
+        *)
+            pr_number="$pr"
+            repo="$(cd "$worktree" && gh repo view --json nameWithOwner --jq '.nameWithOwner' 2>/dev/null)"
+            ;;
+    esac
+    [[ -n "$repo" && "$pr_number" =~ ^[0-9]+$ ]] || return 1
+
+    gh api -X PATCH "repos/${repo}/pulls/${pr_number}" -f "body=${body}" >/dev/null 2>&1
+}
+
 # Self-heals a PR body that still points at local screenshot files: GitHub
 # can't render `file://`, absolute, or workspace-relative image links, and
 # agents don't reliably remember to publish evidence before handing off to
@@ -161,5 +198,5 @@ screenshot_autofix_pr_body() {
     [[ "$changed" -eq 1 && "$new_body" != "$body" ]] || return 0
     current_body="$(gh pr view "$pr" --json body --jq .body 2>/dev/null)" || return 0
     [[ "$current_body" == "$body" ]] || return 0
-    gh pr edit "$pr" --body "$new_body" >/dev/null 2>&1
+    screenshot_edit_pr_body "$worktree" "$pr" "$new_body"
 }

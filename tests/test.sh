@@ -1247,6 +1247,59 @@ if [[ -e "$autofix_calls_file" ]]; then
 fi
 printf 'ok - watcher skips screenshot autofix for a closed PR\n'
 
+# bin/forge runs under `set -o errexit`, and this whole test script does too
+# (see the top of this file). Before watcher_poll was split out of
+# watcher_run, an unguarded failure anywhere in one poll cycle (a transient
+# gh/tmux/no-mistakes hiccup, or any bug not yet discovered) killed the
+# entire background watcher process forever, with no log and no restart --
+# freezing that window's pipeline badge and silently disabling
+# screenshot_autofix_pr_body's PR-body backstop for the rest of the window's
+# life. This is what actually broke PR screenshot embedding in practice: the
+# autofix logic itself was fine, but the process running it had already died
+# by the time a PR existed to fix.
+#
+# `watcher_poll ... || poll_status=$?` also means bash suspends errexit for
+# watcher_poll's *entire* call -- a failure partway through no longer aborts
+# the rest of that cycle either, it just proceeds like `set +e` for the
+# duration of the call. So the case worth proving here is the strictest one:
+# even the very last statement of a cycle failing (the one case that *does*
+# still surface as watcher_poll's own exit status) costs only that cycle.
+watch_iterations=0
+watcher_window_exists() {
+    ((watch_iterations++ < 2))
+}
+poll_attempts=0
+watcher_apply_state() {
+    poll_attempts=$((poll_attempts + 1))
+    if [[ "$poll_attempts" -eq 1 ]]; then
+        return 1
+    fi
+    tmux set-option -w -t "$1" @pipeline_state "$2"
+}
+watcher_no_mistakes_status() {
+    printf '  branch: "feat/intent-workflow"\n'
+    printf '  status: "complete"\n'
+    printf '  pr: "https://example.test/pull/4"\n'
+}
+gh() {
+    printf 'OPEN\n'
+}
+tmux set-option -w -t "$intent_window" @pipeline_state ""
+rm -f "$autofix_calls_file"
+rm -f "$(shipyard_state_home)/watcher.log"
+rmdir "$(shipyard_state_home)/watch-${intent_window}.lock" 2>/dev/null || true
+watcher_run "$intent_window" "$repo_root"
+assert_equal "2" "$poll_attempts" \
+    "a poll cycle whose last step fails doesn't abort the watcher loop -- it retries next cycle"
+assert_equal "published" \
+    "$(tmux show-options -wqv -t "$intent_window" @pipeline_state)" \
+    "watcher applies state normally on the cycle after a failed one"
+if [[ ! -s "$(shipyard_state_home)/watcher.log" ]]; then
+    printf 'not ok - watcher logs a failed poll cycle for diagnosis\n' >&2
+    exit 1
+fi
+printf 'ok - a failing poll cycle is logged and retried, not left to kill the watcher\n'
+
 # Redefining screenshot_autofix_pr_body as a stub above overwrote the real
 # function sourced at the top of this script (bash functions don't stack);
 # re-source it now that the watcher-integration tests are done stubbing it out.
@@ -1260,17 +1313,28 @@ printf 'fake-png' > "$autofix_worktree/artifacts/after.png"
 autofix_pr_body=""
 autofix_pr_body_after_view=""
 autofix_view_count_file="$test_tmp/autofix-view-count"
-autofix_edit_body=""
-autofix_edit_called=0
-# screenshot_autofix_pr_body calls screenshot_publish via command
-# substitution, which forks a subshell -- a shell-variable counter mutated
-# there wouldn't survive back to this scope, so count upload calls on disk.
+# screenshot_autofix_pr_body calls screenshot_publish and screenshot_edit_pr_body
+# (which pipes into `gh api`) via command substitution / pipelines, both of
+# which fork a subshell -- shell variables mutated in the mocks below wouldn't
+# survive back to this scope, so every mock records to disk instead.
 autofix_publish_calls_file="$test_tmp/autofix-publish-calls"
+autofix_edit_calls_file="$test_tmp/autofix-edit-calls"
+autofix_edit_body_file="$test_tmp/autofix-edit-body"
 : > "$autofix_publish_calls_file"
+: > "$autofix_edit_calls_file"
+rm -f "$autofix_edit_body_file"
 screenshot_publish() {
     printf '.' >> "$autofix_publish_calls_file"
     printf '![%s](https://example.test/hosted/%s)\n' "$(basename "$1")" "$(basename "$1")"
 }
+# gh pr edit is deliberately NOT mocked to succeed here: real `gh pr edit
+# --body` fails unconditionally (see screenshot_edit_pr_body's comment in
+# lib/screenshot.sh), so a mock that answered it would hide a regression
+# back to using it. screenshot_autofix_pr_body must go through
+# screenshot_edit_pr_body's REST call (`gh api -X PATCH .../pulls/N -f
+# body=<value>`) instead -- and not its `-f body=@-`/`@file` form, which this
+# tool's actual gh version silently takes as a literal string instead of
+# reading a file/stdin (see the same comment).
 gh() {
     if [[ "$1" == "pr" && "$2" == "view" ]]; then
         autofix_view_count="$(($(<"$autofix_view_count_file") + 1))"
@@ -1282,16 +1346,39 @@ gh() {
         fi
         return 0
     fi
-    if [[ "$1" == "pr" && "$2" == "edit" ]]; then
-        autofix_edit_called=$((autofix_edit_called + 1))
-        shift 3
-        while [[ $# -gt 0 ]]; do
-            if [[ "$1" == "--body" ]]; then
-                autofix_edit_body="$2"
-            fi
-            shift
-        done
+    if [[ "$1" == "repo" && "$2" == "view" ]]; then
+        printf 'example/repo'
         return 0
+    fi
+    if [[ "$1" == "api" && "$2" == "-X" && "$3" == "PATCH" ]]; then
+        printf '.' >> "$autofix_edit_calls_file"
+        case "$4" in
+            repos/example/repo/pulls/42) ;;
+            *)
+                printf 'not ok - autofix PATCHes the resolved repo and PR number\n%s\n' "$4" >&2
+                exit 1
+                ;;
+        esac
+        case "$5" in
+            -f) ;;
+            *)
+                printf 'not ok - autofix passes the new body via -f\n%s\n' "$5" >&2
+                exit 1
+                ;;
+        esac
+        case "$6" in
+            body=*) ;;
+            *)
+                printf 'not ok - autofix passes the new body as a literal -f value, not @file/@-\n%s\n' "$6" >&2
+                exit 1
+                ;;
+        esac
+        printf '%s' "${6#body=}" > "$autofix_edit_body_file"
+        return 0
+    fi
+    if [[ "$1" == "pr" && "$2" == "edit" ]]; then
+        printf 'not ok - autofix must not call gh pr edit (its GraphQL query always fails, see lib/screenshot.sh)\n' >&2
+        exit 1
     fi
     return 0
 }
@@ -1301,17 +1388,17 @@ autofix_pr_body='![before](artifacts/before.png) ![after](artifacts/after.png) !
 screenshot_autofix_pr_body "$autofix_worktree" "42"
 assert_equal \
     '![before](artifacts/before.png) ![after](https://example.test/hosted/after.png) ![live](https://example.test/already.png)' \
-    "$autofix_edit_body" \
+    "$(<"$autofix_edit_body_file")" \
     "autofix rewrites only local links that resolve to a real file"
-assert_equal "1" "$autofix_edit_called" \
+assert_equal "1" "$(wc -c < "$autofix_edit_calls_file")" \
     "autofix edits the PR body once a local link is found"
 
-autofix_edit_called=0
-autofix_edit_body=""
+: > "$autofix_edit_calls_file"
+rm -f "$autofix_edit_body_file"
 printf '0' > "$autofix_view_count_file"
 autofix_pr_body='![missing](artifacts/missing.png) ![live](https://example.test/already.png)'
 screenshot_autofix_pr_body "$autofix_worktree" "42"
-assert_equal "0" "$autofix_edit_called" \
+assert_equal "0" "$(wc -c < "$autofix_edit_calls_file")" \
     "autofix leaves the PR alone when no local link resolves to a file"
 
 : > "$autofix_publish_calls_file"
@@ -1321,17 +1408,17 @@ screenshot_autofix_pr_body "$autofix_worktree" "42"
 assert_equal "1" "$(wc -c < "$autofix_publish_calls_file")" \
     "autofix uploads a repeated local file only once"
 
-autofix_edit_body=""
+rm -f "$autofix_edit_body_file"
 : > "$autofix_publish_calls_file"
 printf '0' > "$autofix_view_count_file"
 autofix_pr_body='- Evidence: Rendered page (local file: <code>artifacts/after.png</code>)'
 screenshot_autofix_pr_body "$autofix_worktree" "42"
 assert_equal \
     '- Evidence: Rendered page ![after.png](https://example.test/hosted/after.png)' \
-    "$autofix_edit_body" \
+    "$(<"$autofix_edit_body_file")" \
     "autofix embeds no-mistakes local-file evidence annotations"
 
-autofix_edit_body=""
+rm -f "$autofix_edit_body_file"
 : > "$autofix_publish_calls_file"
 printf '0' > "$autofix_view_count_file"
 autofix_pr_body='![after](artifacts/after.png) (local file: <code>artifacts/after.png</code>)'
@@ -1339,37 +1426,37 @@ screenshot_autofix_pr_body "$autofix_worktree" "42"
 assert_equal "1" "$(wc -c < "$autofix_publish_calls_file")" \
     "autofix publishes a file shared by Markdown and evidence annotation once"
 
-autofix_edit_body=""
+rm -f "$autofix_edit_body_file"
 printf '0' > "$autofix_view_count_file"
 autofix_pr_body="![file-uri](file://$autofix_worktree/artifacts/after.png)"
 screenshot_autofix_pr_body "$autofix_worktree" "42"
 assert_equal "https://example.test/hosted/after.png" \
-    "$(sed -E 's/.*\(([^)]+)\)/\1/' <<<"$autofix_edit_body")" \
+    "$(sed -E 's/.*\(([^)]+)\)/\1/' <"$autofix_edit_body_file")" \
     "autofix strips a file:// prefix before checking the filesystem"
 
-autofix_edit_called=0
+: > "$autofix_edit_calls_file"
 printf '0' > "$autofix_view_count_file"
 autofix_pr_body='[download](artifacts/after.png)'
 screenshot_autofix_pr_body "$autofix_worktree" "42"
-assert_equal "0" "$autofix_edit_called" \
+assert_equal "0" "$(wc -c < "$autofix_edit_calls_file")" \
     "autofix ignores ordinary markdown links to image files"
 
-autofix_edit_called=0
+: > "$autofix_edit_calls_file"
 printf '0' > "$autofix_view_count_file"
 autofix_pr_body='![after](artifacts/after.png)'
 autofix_pr_body_after_view='A concurrently updated body'
 screenshot_autofix_pr_body "$autofix_worktree" "42"
-assert_equal "0" "$autofix_edit_called" \
+assert_equal "0" "$(wc -c < "$autofix_edit_calls_file")" \
     "autofix preserves a PR body changed during publication"
 autofix_pr_body_after_view=""
 
-autofix_edit_called=0
+: > "$autofix_edit_calls_file"
 printf '0' > "$autofix_view_count_file"
 screenshot_publish() {
     return 1
 }
 screenshot_autofix_pr_body "$autofix_worktree" "42"
-assert_equal "0" "$autofix_edit_called" \
+assert_equal "0" "$(wc -c < "$autofix_edit_calls_file")" \
     "autofix leaves local links intact when publication fails"
 
 shipyard_record_intent "lease-manifest" "/projects/app" "app" "restore work" \
