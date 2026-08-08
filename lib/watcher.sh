@@ -130,10 +130,19 @@ watcher_ensure_attach_pane() {
     tmux set-option -p -t "$pane_id" @shipyard_attach_pane 1
 }
 
-watcher_run() {
-    local window_id="${1:-}"
-    local worktree="${2:-}"
-    local lock_dir
+
+# One 10-second poll cycle's worth of work. Split out of watcher_run so a
+# failure partway through -- a transient gh/tmux/no-mistakes hiccup, or any
+# bug not yet discovered -- can be confined to this one cycle instead of
+# killing the whole background watcher process: bin/forge runs under `set -o
+# errexit`, so an unguarded failure anywhere in here used to take the entire
+# while loop down with it, permanently freezing this window's pipeline badge
+# and silently disabling screenshot_autofix_pr_body's PR-body backstop for
+# the rest of the window's life with no error, log, or restart. See
+# watcher_run's `|| poll_status=$?` call site.
+watcher_poll() {
+    local window_id="$1"
+    local worktree="$2"
     local output
     local current_branch
     local run_branch
@@ -141,7 +150,77 @@ watcher_run() {
     local pr
     local pr_state
     local manual_state
+
+    shipyard_refresh_window_context "$window_id"
+    shipyard_snapshot_agent "$window_id"
+    watcher_apply_dirty "$window_id" "$worktree"
+    manual_state="$(tmux show-options -wqv -t "$window_id" @pipeline_manual_state)"
+    output=""
+    if command -v no-mistakes >/dev/null 2>&1; then
+        output="$(watcher_no_mistakes_status "$worktree")"
+    fi
+    current_branch="$(git -C "$worktree" branch --show-current 2>/dev/null || true)"
+    run_branch="$(sed -n 's/^  branch: *"\{0,1\}\([^"]*\)"\{0,1\}$/\1/p' <<<"$output" | head -n 1)"
+    if [[ -z "$current_branch" || "$run_branch" != "$current_branch" ]]; then
+        output=""
+    fi
+    run_status="$(sed -n 's/^  status: *"\{0,1\}\([^"]*\)"\{0,1\}$/\1/p' <<<"$output" | head -n 1)"
+    pr="$(sed -n 's/^  pr: *"\([^"]*\)".*/\1/p' <<<"$output" | head -n 1)"
+
+    # Attach-pane visibility tracks whether a run is actually active, not
+    # which badge wins precedence -- a run can still be going while the
+    # window shows attention (stale manual flag) or published (PR already
+    # opened mid-run), and the TUI should stay reachable either way.
+    if [[ "$run_status" == "running" ]]; then
+        watcher_ensure_attach_pane "$window_id" "$worktree"
+    fi
+
+    if [[ "$manual_state" == "attention" ]]; then
+        watcher_apply_state "$window_id" attention "$pr"
+    elif [[ "$run_status" == "failed" || "$run_status" == "cancelled" ]]; then
+        watcher_apply_state "$window_id" attention "$pr"
+    elif [[ -n "$pr" ]]; then
+        pr_state=""
+        if command -v gh >/dev/null 2>&1; then
+            pr_state="$(gh pr view "$pr" --json state --jq .state 2>/dev/null || true)"
+        fi
+        if [[ "$pr_state" == "MERGED" ]]; then
+            watcher_apply_state "$window_id" merged "$pr"
+        elif [[ "$pr_state" == "CLOSED" ]]; then
+            watcher_apply_state "$window_id" attention "$pr"
+        else
+            if command -v gh >/dev/null 2>&1; then
+                screenshot_autofix_pr_body "$worktree" "$pr"
+            fi
+            watcher_apply_state "$window_id" published "$pr"
+        fi
+    elif [[ "$run_status" == "running" ]]; then
+        watcher_apply_state "$window_id" validating
+    elif [[ "$manual_state" != "planning" && -n "$manual_state" ]]; then
+        watcher_apply_state "$window_id" "$manual_state"
+    elif watcher_should_build "$window_id" "$worktree"; then
+        watcher_apply_state "$window_id" building
+    else
+        watcher_apply_state "$window_id" planning
+    fi
+}
+
+watcher_log_poll_failure() {
+    local window_id="$1"
+    local status="$2"
+
+    mkdir -p "$(shipyard_state_home)" 2>/dev/null || true
+    printf '%s forge: watcher poll failed for %s (exit %s); retrying next cycle\n' \
+        "$(date -Iseconds 2>/dev/null || date)" "$window_id" "$status" \
+        >>"$(shipyard_state_home)/watcher.log" 2>/dev/null || true
+}
+
+watcher_run() {
+    local window_id="${1:-}"
+    local worktree="${2:-}"
+    local lock_dir
     local lock_cleanup
+    local poll_status
 
     [[ -n "$window_id" && -n "$worktree" ]] || return 2
     lock_dir="$(shipyard_state_home)/watch-${window_id}.lock"
@@ -151,59 +230,9 @@ watcher_run() {
     trap "$lock_cleanup" EXIT
 
     while watcher_window_exists "$window_id"; do
-        shipyard_refresh_window_context "$window_id"
-        shipyard_snapshot_agent "$window_id"
-        watcher_apply_dirty "$window_id" "$worktree"
-        manual_state="$(tmux show-options -wqv -t "$window_id" @pipeline_manual_state)"
-        output=""
-        if command -v no-mistakes >/dev/null 2>&1; then
-            output="$(watcher_no_mistakes_status "$worktree")"
-        fi
-        current_branch="$(git -C "$worktree" branch --show-current 2>/dev/null || true)"
-        run_branch="$(sed -n 's/^  branch: *"\{0,1\}\([^"]*\)"\{0,1\}$/\1/p' <<<"$output" | head -n 1)"
-        if [[ -z "$current_branch" || "$run_branch" != "$current_branch" ]]; then
-            output=""
-        fi
-        run_status="$(sed -n 's/^  status: *"\{0,1\}\([^"]*\)"\{0,1\}$/\1/p' <<<"$output" | head -n 1)"
-        pr="$(sed -n 's/^  pr: *"\([^"]*\)".*/\1/p' <<<"$output" | head -n 1)"
-
-        # Attach-pane visibility tracks whether a run is actually active, not
-        # which badge wins precedence -- a run can still be going while the
-        # window shows attention (stale manual flag) or published (PR already
-        # opened mid-run), and the TUI should stay reachable either way.
-        if [[ "$run_status" == "running" ]]; then
-            watcher_ensure_attach_pane "$window_id" "$worktree"
-        fi
-
-        if [[ "$manual_state" == "attention" ]]; then
-            watcher_apply_state "$window_id" attention "$pr"
-        elif [[ "$run_status" == "failed" || "$run_status" == "cancelled" ]]; then
-            watcher_apply_state "$window_id" attention "$pr"
-        elif [[ -n "$pr" ]]; then
-            pr_state=""
-            if command -v gh >/dev/null 2>&1; then
-                pr_state="$(gh pr view "$pr" --json state --jq .state 2>/dev/null || true)"
-            fi
-            if [[ "$pr_state" == "MERGED" ]]; then
-                watcher_apply_state "$window_id" merged "$pr"
-            elif [[ "$pr_state" == "CLOSED" ]]; then
-                watcher_apply_state "$window_id" attention "$pr"
-            else
-                if command -v gh >/dev/null 2>&1; then
-                    screenshot_autofix_pr_body "$worktree" "$pr"
-                fi
-                watcher_apply_state "$window_id" published "$pr"
-            fi
-        elif [[ "$run_status" == "running" ]]; then
-            watcher_apply_state "$window_id" validating
-        elif [[ "$manual_state" != "planning" && -n "$manual_state" ]]; then
-            watcher_apply_state "$window_id" "$manual_state"
-        elif watcher_should_build "$window_id" "$worktree"; then
-            watcher_apply_state "$window_id" building
-        else
-            watcher_apply_state "$window_id" planning
-        fi
-
+        poll_status=0
+        watcher_poll "$window_id" "$worktree" || poll_status=$?
+        [[ "$poll_status" -eq 0 ]] || watcher_log_poll_failure "$window_id" "$poll_status"
         sleep 10
     done
 }
