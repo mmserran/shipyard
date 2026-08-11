@@ -259,14 +259,14 @@ automatic state management.
 
 ## Git commit trailers
 
-AI-assisted commits must use exactly one
-`Co-Authored-By: [ToolName] [Model] <[identifier]>` trailer (see
-[AGENTS.md](AGENTS.md)). `forge open` and `forge new` install a `commit-msg`
-wrapper into the repository's active hooks directory (default shared
-`.git/hooks`, or an existing `core.hooksPath`) without taking exclusive
+`forge open` and `forge new` install a thin `commit-msg` wrapper into the
+repository's active hooks directory (shared `.git/hooks` by default, or an
+existing local `core.hooksPath` such as husky/lefthook) without taking exclusive
 ownership, so product hooks keep running across worktrees including Treehouse
-leases. The normalizer drops only generic one-token Cursor-style injectors when
-a valid ToolName + Model trailer is also present.
+leases. Prior installs that exclusively pointed `core.hooksPath` at Shipyard's
+`githooks/` are migrated off that exclusive path. Agent Co-Authored-By format and
+when the normalizer rewrites a message are documented in
+[AGENTS.md](AGENTS.md#git-commit-trailers).
 
 ## Architecture
 
@@ -278,9 +278,10 @@ a valid ToolName + Model trailer is also present.
   a pause (`forge open` with no path), force-closes windows (`forge close`),
   and records lease cleanup plus durable intent and project manifests.
 - `lib/hooks.sh` installs Shipyard's commit-msg wrapper into the active hooks
-  directory without exclusive `core.hooksPath` ownership.
-- `githooks/commit-msg` drops generic one-token Co-Authored-By injectors when a
-  ToolName + Model trailer is present, leaving other trailers intact.
+  directory without exclusive `core.hooksPath` ownership (see
+  [Git commit trailers](#git-commit-trailers)).
+- `githooks/commit-msg` is the Co-Authored-By normalizer invoked by that
+  wrapper (behavior: [AGENTS.md](AGENTS.md#git-commit-trailers)).
 - `lib/context.sh` maintains pane repository and branch context.
 - `lib/pipeline.sh` maps effective states to tmux badges.
 - `lib/watcher.sh` derives validation and PR states, snapshots the observed
