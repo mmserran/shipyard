@@ -43,6 +43,23 @@ No-mistakes validation/push/PR-creation are pre-authorized; merging is not.
 
 ## Git Commit Trailers
 
-Add authorship with `git commit --trailer "Co-Authored-By: [ToolName] [Model] <[identifier]>"`.
+AI-assisted commits must end with a trailer in this form:
 
-Substitute `<[identifier]>` with your AI tool's official service email address (e.g., `noreply@openai.com` for Codex or `gemini-code-assist@google.com` for Gemini models).
+```
+Co-Authored-By: [ToolName] [Model] <[identifier]>
+```
+
+Use a single `--trailer` when committing (do not also paste a second Co-Authored-By into the message body):
+
+```bash
+git commit --trailer "Co-Authored-By: [ToolName] [Model] <[identifier]>" -m "$(cat <<'EOF'
+Commit subject.
+
+Optional body.
+EOF
+)"
+```
+
+Substitute `<[identifier]>` with the tool’s official service email (e.g. `noreply@openai.com` for Codex, `cursoragent@cursor.com` for Cursor, `gemini-code-assist@google.com` for Gemini). Example: `Cursor Composer <cursoragent@cursor.com>`.
+
+**Why a hook is required:** Cursor (and similar harnesses) often auto-append a second trailer such as `Co-authored-by: Cursor <cursoragent@cursor.com>`. Instructions alone cannot stop that injector. Shipyard’s `githooks/commit-msg` drops only those generic one-token injectors when a valid ToolName + Model trailer is also present, and leaves other Co-Authored-By trailers (human co-authors, bots) intact. Do not check Shipyard hook files into product repositories; `forge open` / `forge new` install the wrapper into the repo’s active hooks directory (product install details: [Git commit trailers](README.md#git-commit-trailers)).

@@ -190,6 +190,8 @@ shipyard_ensure_project_session() {
     local command_window_id
     local existing_root
 
+    shipyard_install_git_hooks "$project_root"
+
     if ! tmux has-session -t "=$session_name" 2>/dev/null; then
         if ! repo_window_id="$(tmux new-session -d -P -F '#{window_id}' \
             -s "$session_name" -n "$session_name" -c "$project_root" yazi)"; then
@@ -784,6 +786,7 @@ shipyard_new() {
     fi
 
     session_name="$(shipyard_session_for_project "$project_root")"
+    shipyard_install_git_hooks "$project_root"
     shipyard_reconcile
     lease_holder="shipyard:${session_name}:${intent}"
     lease_json="$(cd "$project_root" && treehouse get --lease --json --lease-holder "$lease_holder")" || return

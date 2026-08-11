@@ -1,0 +1,70 @@
+#!/usr/bin/env python3
+"""Normalize AI Co-Authored-By dual-trailer cases on every commit.
+
+Cursor (and similar tools) often append a generic one-token trailer such as
+  Co-authored-by: Cursor <cursoragent@cursor.com>
+on top of a well-formed AI trailer:
+  Co-Authored-By: ToolName Model <identifier@example.com>
+
+When both forms are present, this hook drops only the generic one-token
+injectors and leaves every other Co-Authored-By trailer intact (including
+multiple human co-authors). It does not rewrite or reject ordinary multi-author
+or bot trailers when no ToolName Model trailer is present.
+"""
+
+from __future__ import annotations
+
+import re
+import sys
+from pathlib import Path
+
+TRAILER_RE = re.compile(r"(?i)^Co-Authored-By:\s*(.+?)\s*$")
+# ToolName Model <email> — two tokens before angle-bracket address
+TWO_TOKEN_RE = re.compile(r"^(\S+)\s+(\S+)\s+<([^<>\s]+)>\s*$")
+# Generic injector / bot form — single token before angle-bracket address
+ONE_TOKEN_RE = re.compile(r"^(\S+)\s+<([^<>\s]+)>\s*$")
+
+
+def main() -> int:
+    if len(sys.argv) < 2:
+        print("commit-msg: missing message path", file=sys.stderr)
+        return 1
+
+    path = Path(sys.argv[1])
+    text = path.read_text(encoding="utf-8")
+    lines = text.splitlines()
+
+    trailers: list[tuple[int, str]] = []
+    for i, line in enumerate(lines):
+        m = TRAILER_RE.match(line)
+        if m:
+            trailers.append((i, m.group(1).strip()))
+
+    if not trailers:
+        return 0
+
+    two_token_idxs: list[int] = []
+    one_token_idxs: list[int] = []
+    for i, value in trailers:
+        if TWO_TOKEN_RE.match(value):
+            two_token_idxs.append(i)
+        elif ONE_TOKEN_RE.match(value):
+            one_token_idxs.append(i)
+
+    # Collapse only the AI dual-trailer case: valid Tool+Model plus generic
+    # one-token injectors. Leave human multi-author and bot-only trailers alone.
+    if not two_token_idxs or not one_token_idxs:
+        return 0
+
+    drop = set(one_token_idxs)
+    body = [line for i, line in enumerate(lines) if i not in drop]
+
+    while body and body[-1].strip() == "":
+        body.pop()
+
+    path.write_text("\n".join(body) + "\n", encoding="utf-8")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

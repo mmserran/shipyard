@@ -257,6 +257,17 @@ forge --help  # list all commands
 Internal `watch`, `reap`, and `reconcile` commands support tmux hooks and
 automatic state management.
 
+## Git commit trailers
+
+`forge open` and `forge new` install a thin `commit-msg` wrapper into the
+repository's active hooks directory (shared `.git/hooks` by default, or an
+existing local `core.hooksPath` such as husky/lefthook) without taking exclusive
+ownership, so product hooks keep running across worktrees including Treehouse
+leases. Prior installs that exclusively pointed `core.hooksPath` at Shipyard's
+`githooks/` are migrated off that exclusive path. Agent Co-Authored-By format and
+when the normalizer rewrites a message are documented in
+[AGENTS.md](AGENTS.md#git-commit-trailers).
+
 ## Architecture
 
 - `bin/forge` routes the CLI.
@@ -266,6 +277,11 @@ automatic state management.
   closes every open window (`forge pause`), restores them after tmux loss or
   a pause (`forge open` with no path), force-closes windows (`forge close`),
   and records lease cleanup plus durable intent and project manifests.
+- `lib/hooks.sh` installs Shipyard's commit-msg wrapper into the active hooks
+  directory without exclusive `core.hooksPath` ownership (see
+  [Git commit trailers](#git-commit-trailers)).
+- `githooks/commit-msg` is the Co-Authored-By normalizer invoked by that
+  wrapper (behavior: [AGENTS.md](AGENTS.md#git-commit-trailers)).
 - `lib/context.sh` maintains pane repository and branch context.
 - `lib/pipeline.sh` maps effective states to tmux badges.
 - `lib/watcher.sh` derives validation and PR states, snapshots the observed
