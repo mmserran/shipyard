@@ -2105,14 +2105,34 @@ printf '%s\n' 'Subject line' '' 'Body.' '' \
 "$repo_root/githooks/commit-msg" "$trailer_msg"
 assert_equal "$(cat "$trailer_msg")" \
 "$(printf '%s\n' 'Subject line' '' 'Body.' '' 'Co-Authored-By: Cursor Composer <cursoragent@cursor.com>')" \
-    "commit-msg keeps exactly one ToolName Model trailer"
-bad_trailer_msg="$(mktemp -p "$test_tmp")"
-printf '%s\n' 'Subject' '' 'Co-authored-by: Cursor <cursoragent@cursor.com>' > "$bad_trailer_msg"
-if "$repo_root/githooks/commit-msg" "$bad_trailer_msg" 2>/dev/null; then
-    printf 'not ok - commit-msg must reject Co-Authored-By without Model\n' >&2
-    exit 1
-fi
-printf 'ok - commit-msg rejects Co-Authored-By without Model\n'
+    "commit-msg drops generic injector when ToolName Model present"
+human_trailer_msg="$(mktemp -p "$test_tmp")"
+printf '%s\n' 'Subject line' '' \
+    'Co-authored-by: Ada Lovelace <ada@example.com>' \
+    'Co-authored-by: Alan Turing <alan@example.com>' > "$human_trailer_msg"
+"$repo_root/githooks/commit-msg" "$human_trailer_msg"
+assert_equal "$(cat "$human_trailer_msg")" \
+"$(printf '%s\n' 'Subject line' '' \
+    'Co-authored-by: Ada Lovelace <ada@example.com>' \
+    'Co-authored-by: Alan Turing <alan@example.com>')" \
+    "commit-msg leaves multi-human Co-Authored-By trailers intact"
+ai_plus_human_msg="$(mktemp -p "$test_tmp")"
+printf '%s\n' 'Subject line' '' \
+    'Co-authored-by: Ada Lovelace <ada@example.com>' \
+    'Co-authored-by: Cursor <cursoragent@cursor.com>' \
+    'Co-Authored-By: Cursor Composer <cursoragent@cursor.com>' > "$ai_plus_human_msg"
+"$repo_root/githooks/commit-msg" "$ai_plus_human_msg"
+assert_equal "$(cat "$ai_plus_human_msg")" \
+"$(printf '%s\n' 'Subject line' '' \
+    'Co-authored-by: Ada Lovelace <ada@example.com>' \
+    'Co-Authored-By: Cursor Composer <cursoragent@cursor.com>')" \
+    "commit-msg keeps human trailer while dropping Cursor injector"
+bot_trailer_msg="$(mktemp -p "$test_tmp")"
+printf '%s\n' 'Subject' '' 'Co-authored-by: dependabot[bot] <49699333+dependabot[bot]@users.noreply.github.com>' > "$bot_trailer_msg"
+"$repo_root/githooks/commit-msg" "$bot_trailer_msg"
+assert_equal "$(cat "$bot_trailer_msg")" \
+"$(printf '%s\n' 'Subject' '' 'Co-authored-by: dependabot[bot] <49699333+dependabot[bot]@users.noreply.github.com>')" \
+    "commit-msg leaves single-token bot trailers intact"
 
 # --- shipyard_install_git_hooks ---
 hooks_repo="$test_tmp/hooks-repo"
@@ -2120,10 +2140,66 @@ mkdir -p "$hooks_repo"
 git init -q "$hooks_repo"
 git -C "$hooks_repo" -c user.email=test@example.com -c user.name=test \
     commit -q --allow-empty -m initial
+# Existing product hook must keep running after install
+product_hook="$hooks_repo/.git/hooks/commit-msg"
+mkdir -p "$(dirname "$product_hook")"
+printf '%s\n' '#!/bin/sh' 'echo product-hook-ran >> "$1"' > "$product_hook"
+chmod +x "$product_hook"
 shipyard_install_git_hooks "$hooks_repo"
-expected_hooks="$(cd "$repo_root/githooks" && pwd -P)"
-assert_equal "$(git -C "$hooks_repo" config --get core.hooksPath)" \
-    "$expected_hooks" \
-    "shipyard_install_git_hooks sets absolute core.hooksPath"
+if git -C "$hooks_repo" config --get core.hooksPath >/dev/null 2>&1; then
+    printf 'not ok - shipyard_install_git_hooks must not set exclusive core.hooksPath\n' >&2
+    exit 1
+fi
+printf 'ok - shipyard_install_git_hooks leaves core.hooksPath unset\n'
+common_hooks="$(git -C "$hooks_repo" rev-parse --git-common-dir)/hooks"
+if [[ "$common_hooks" != /* ]]; then
+    common_hooks="$hooks_repo/$common_hooks"
+fi
+[[ -x "$common_hooks/commit-msg" ]] || {
+    printf 'not ok - expected commit-msg wrapper in common hooks dir\n' >&2
+    exit 1
+}
+grep -q 'shipyard-managed-commit-msg' "$common_hooks/commit-msg" || {
+    printf 'not ok - expected shipyard-managed commit-msg wrapper\n' >&2
+    exit 1
+}
+[[ -e "$common_hooks/commit-msg.shipyard-wrapped" ]] || {
+    printf 'not ok - expected previous commit-msg to be wrapped\n' >&2
+    exit 1
+}
+chain_msg="$(mktemp -p "$test_tmp")"
+printf '%s\n' 'Subject' '' \
+    'Co-authored-by: Cursor <cursoragent@cursor.com>' \
+    'Co-Authored-By: Cursor Composer <cursoragent@cursor.com>' > "$chain_msg"
+"$common_hooks/commit-msg" "$chain_msg"
+grep -q 'product-hook-ran' "$chain_msg" || {
+    printf 'not ok - chained product commit-msg did not run\n' >&2
+    exit 1
+}
+assert_equal "$(grep -c 'Co-Authored-By: Cursor Composer' "$chain_msg" || true)" "1" \
+    "wrapper runs shipyard normalizer after product hook"
+# Migrate off a prior exclusive Shipyard hooksPath
+exclusive_repo="$test_tmp/hooks-exclusive"
+mkdir -p "$exclusive_repo"
+git init -q "$exclusive_repo"
+git -C "$exclusive_repo" -c user.email=test@example.com -c user.name=test \
+    commit -q --allow-empty -m initial
+shipyard_hooks="$(cd "$repo_root/githooks" && pwd -P)"
+git -C "$exclusive_repo" config core.hooksPath "$shipyard_hooks"
+shipyard_install_git_hooks "$exclusive_repo"
+if git -C "$exclusive_repo" config --get core.hooksPath >/dev/null 2>&1; then
+    printf 'not ok - install should unset exclusive Shipyard core.hooksPath\n' >&2
+    exit 1
+fi
+printf 'ok - shipyard_install_git_hooks migrates exclusive core.hooksPath\n'
+excl_common="$(git -C "$exclusive_repo" rev-parse --git-common-dir)/hooks"
+if [[ "$excl_common" != /* ]]; then
+    excl_common="$exclusive_repo/$excl_common"
+fi
+[[ -x "$excl_common/commit-msg" ]] || {
+    printf 'not ok - expected commit-msg after exclusive hooksPath migration\n' >&2
+    exit 1
+}
+printf 'ok - shipyard_install_git_hooks installs into common hooks dir\n'
 
 printf 'all tests passed\n'

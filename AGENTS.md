@@ -62,6 +62,6 @@ EOF
 
 Substitute `<[identifier]>` with the tool’s official service email (e.g. `noreply@openai.com` for Codex, `cursoragent@cursor.com` for Cursor, `gemini-code-assist@google.com` for Gemini). Example: `Cursor Composer <cursoragent@cursor.com>`.
 
-**Why a hook is required:** Cursor (and similar harnesses) often auto-append a second trailer such as `Co-authored-by: Cursor <cursoragent@cursor.com>`. Instructions alone cannot stop that injector. Shipyard’s `githooks/commit-msg` collapses all Co-Authored-By lines to the single required form when a valid trailer is present, and rejects commits that have Co-Authored-By lines but none matching ToolName + Model + email.
+**Why a hook is required:** Cursor (and similar harnesses) often auto-append a second trailer such as `Co-authored-by: Cursor <cursoragent@cursor.com>`. Instructions alone cannot stop that injector. Shipyard’s `githooks/commit-msg` drops only those generic one-token injectors when a valid ToolName + Model trailer is also present, and leaves other Co-Authored-By trailers (human co-authors, bots) intact.
 
-`forge open` / `forge new` install that hook on the project’s local git config (`core.hooksPath` → `$SHIPYARD_HOME/githooks`, absolute), so every worktree of the repo—including Treehouse leases—gets the same enforcement without checking hooks into product repositories.
+`forge open` / `forge new` install a thin wrapper into the repository’s active hooks directory (shared `.git/hooks`, or an existing `core.hooksPath` such as husky/lefthook—without replacing that path), so every worktree that uses those hooks gets the normalizer without checking Shipyard files into product repositories.

@@ -1,14 +1,15 @@
 #!/usr/bin/env python3
-"""Normalize Co-Authored-By trailers on every commit.
+"""Normalize AI Co-Authored-By dual-trailer cases on every commit.
 
-Requires AI-assisted commits that include any Co-Authored-By line to end with
-exactly one trailer in the form:
-
+Cursor (and similar tools) often append a generic one-token trailer such as
+  Co-authored-by: Cursor <cursoragent@cursor.com>
+on top of a well-formed AI trailer:
   Co-Authored-By: ToolName Model <identifier@example.com>
 
-Cursor (and similar tools) often append a generic second trailer such as
-  Co-authored-by: Cursor <cursoragent@cursor.com>
-This hook drops extras and keeps a single well-formed trailer when present.
+When both forms are present, this hook drops only the generic one-token
+injectors and leaves every other Co-Authored-By trailer intact (including
+multiple human co-authors). It does not rewrite or reject ordinary multi-author
+or bot trailers when no ToolName Model trailer is present.
 """
 
 from __future__ import annotations
@@ -19,7 +20,9 @@ from pathlib import Path
 
 TRAILER_RE = re.compile(r"(?i)^Co-Authored-By:\s*(.+?)\s*$")
 # ToolName Model <email> — two tokens before angle-bracket address
-VALID_VALUE_RE = re.compile(r"^(\S+)\s+(\S+)\s+<([^<>\s]+)>\s*$")
+TWO_TOKEN_RE = re.compile(r"^(\S+)\s+(\S+)\s+<([^<>\s]+)>\s*$")
+# Generic injector / bot form — single token before angle-bracket address
+ONE_TOKEN_RE = re.compile(r"^(\S+)\s+<([^<>\s]+)>\s*$")
 
 
 def main() -> int:
@@ -40,33 +43,25 @@ def main() -> int:
     if not trailers:
         return 0
 
-    valid: list[tuple[str, str, str]] = []
-    for _, value in trailers:
-        m = VALID_VALUE_RE.match(value)
-        if m:
-            valid.append((m.group(1), m.group(2), m.group(3)))
+    two_token_idxs: list[int] = []
+    one_token_idxs: list[int] = []
+    for i, value in trailers:
+        if TWO_TOKEN_RE.match(value):
+            two_token_idxs.append(i)
+        elif ONE_TOKEN_RE.match(value):
+            one_token_idxs.append(i)
 
-    if not valid:
-        print(
-            "commit-msg: Co-Authored-By present but none match required form:\n"
-            "  Co-Authored-By: ToolName Model <identifier@example.com>\n"
-            "Add authorship with:\n"
-            '  git commit --trailer "Co-Authored-By: [ToolName] [Model] <[identifier]>"\n'
-            "See $SHIPYARD_HOME/AGENTS.md (Git Commit Trailers).",
-            file=sys.stderr,
-        )
-        return 1
+    # Collapse only the AI dual-trailer case: valid Tool+Model plus generic
+    # one-token injectors. Leave human multi-author and bot-only trailers alone.
+    if not two_token_idxs or not one_token_idxs:
+        return 0
 
-    tool, model, ident = valid[0]
-    canonical = f"Co-Authored-By: {tool} {model} <{ident}>"
-    trailer_idxs = {i for i, _ in trailers}
-    body = [line for i, line in enumerate(lines) if i not in trailer_idxs]
+    drop = set(one_token_idxs)
+    body = [line for i, line in enumerate(lines) if i not in drop]
 
     while body and body[-1].strip() == "":
         body.pop()
 
-    body.append("")
-    body.append(canonical)
     path.write_text("\n".join(body) + "\n", encoding="utf-8")
     return 0
 
