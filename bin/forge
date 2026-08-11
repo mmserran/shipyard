@@ -9,6 +9,9 @@ SHIPYARD_HOME="${SHIPYARD_HOME:-$HOME/.config/shipyard}"
 # shellcheck source=../lib/context.sh
 source "$SHIPYARD_HOME/lib/context.sh"
 
+# shellcheck source=../lib/hooks.sh
+source "$SHIPYARD_HOME/lib/hooks.sh"
+
 # shellcheck source=../lib/pipeline.sh
 source "$SHIPYARD_HOME/lib/pipeline.sh"
 

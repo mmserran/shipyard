@@ -257,6 +257,16 @@ forge --help  # list all commands
 Internal `watch`, `reap`, and `reconcile` commands support tmux hooks and
 automatic state management.
 
+## Git commit trailers
+
+AI-assisted commits must use exactly one
+`Co-Authored-By: [ToolName] [Model] <[identifier]>` trailer (see
+[AGENTS.md](AGENTS.md)). `forge open` and `forge new` set the project's local
+`core.hooksPath` to Shipyard's absolute `githooks/` directory so the
+`commit-msg` normalizer runs in every worktree of that repository (including
+Treehouse leases). The hook collapses duplicate/generic Cursor trailers into
+the one required form.
+
 ## Architecture
 
 - `bin/forge` routes the CLI.
@@ -266,6 +276,9 @@ automatic state management.
   closes every open window (`forge pause`), restores them after tmux loss or
   a pause (`forge open` with no path), force-closes windows (`forge close`),
   and records lease cleanup plus durable intent and project manifests.
+- `lib/hooks.sh` installs Shipyard's git hooks onto a project's local config.
+- `githooks/commit-msg` normalizes Co-Authored-By trailers to a single
+  ToolName + Model + email form.
 - `lib/context.sh` maintains pane repository and branch context.
 - `lib/pipeline.sh` maps effective states to tmux badges.
 - `lib/watcher.sh` derives validation and PR states, snapshots the observed

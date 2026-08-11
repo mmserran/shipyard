@@ -25,6 +25,8 @@ export PATH="$test_tmp/bin:$PATH"
 
 # shellcheck source=../lib/context.sh
 source "$repo_root/lib/context.sh"
+# shellcheck source=../lib/hooks.sh
+source "$repo_root/lib/hooks.sh"
 # shellcheck source=../lib/pipeline.sh
 source "$repo_root/lib/pipeline.sh"
 # shellcheck source=../lib/session.sh
@@ -2094,5 +2096,34 @@ fi
 printf 'ok - pause/restore keeps prefix-colliding session names distinct\n'
 tmux kill-session -t "=$prefix_short_session" 2>/dev/null || true
 tmux kill-session -t "=$prefix_long_session" 2>/dev/null || true
+
+# --- commit-msg trailer normalization ---
+trailer_msg="$(mktemp -p "$test_tmp")"
+printf '%s\n' 'Subject line' '' 'Body.' '' \
+    'Co-authored-by: Cursor <cursoragent@cursor.com>' \
+    'Co-Authored-By: Cursor Composer <cursoragent@cursor.com>' > "$trailer_msg"
+"$repo_root/githooks/commit-msg" "$trailer_msg"
+assert_equal "$(cat "$trailer_msg")" \
+"$(printf '%s\n' 'Subject line' '' 'Body.' '' 'Co-Authored-By: Cursor Composer <cursoragent@cursor.com>')" \
+    "commit-msg keeps exactly one ToolName Model trailer"
+bad_trailer_msg="$(mktemp -p "$test_tmp")"
+printf '%s\n' 'Subject' '' 'Co-authored-by: Cursor <cursoragent@cursor.com>' > "$bad_trailer_msg"
+if "$repo_root/githooks/commit-msg" "$bad_trailer_msg" 2>/dev/null; then
+    printf 'not ok - commit-msg must reject Co-Authored-By without Model\n' >&2
+    exit 1
+fi
+printf 'ok - commit-msg rejects Co-Authored-By without Model\n'
+
+# --- shipyard_install_git_hooks ---
+hooks_repo="$test_tmp/hooks-repo"
+mkdir -p "$hooks_repo"
+git init -q "$hooks_repo"
+git -C "$hooks_repo" -c user.email=test@example.com -c user.name=test \
+    commit -q --allow-empty -m initial
+shipyard_install_git_hooks "$hooks_repo"
+expected_hooks="$(cd "$repo_root/githooks" && pwd -P)"
+assert_equal "$(git -C "$hooks_repo" config --get core.hooksPath)" \
+    "$expected_hooks" \
+    "shipyard_install_git_hooks sets absolute core.hooksPath"
 
 printf 'all tests passed\n'

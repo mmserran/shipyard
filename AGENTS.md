@@ -43,6 +43,25 @@ No-mistakes validation/push/PR-creation are pre-authorized; merging is not.
 
 ## Git Commit Trailers
 
-Add authorship with `git commit --trailer "Co-Authored-By: [ToolName] [Model] <[identifier]>"`.
+AI-assisted commits must end with a trailer in this form:
 
-Substitute `<[identifier]>` with your AI tool's official service email address (e.g., `noreply@openai.com` for Codex or `gemini-code-assist@google.com` for Gemini models).
+```
+Co-Authored-By: [ToolName] [Model] <[identifier]>
+```
+
+Use a single `--trailer` when committing (do not also paste a second Co-Authored-By into the message body):
+
+```bash
+git commit --trailer "Co-Authored-By: [ToolName] [Model] <[identifier]>" -m "$(cat <<'EOF'
+Commit subject.
+
+Optional body.
+EOF
+)"
+```
+
+Substitute `<[identifier]>` with the tool’s official service email (e.g. `noreply@openai.com` for Codex, `cursoragent@cursor.com` for Cursor, `gemini-code-assist@google.com` for Gemini). Example: `Cursor Composer <cursoragent@cursor.com>`.
+
+**Why a hook is required:** Cursor (and similar harnesses) often auto-append a second trailer such as `Co-authored-by: Cursor <cursoragent@cursor.com>`. Instructions alone cannot stop that injector. Shipyard’s `githooks/commit-msg` collapses all Co-Authored-By lines to the single required form when a valid trailer is present, and rejects commits that have Co-Authored-By lines but none matching ToolName + Model + email.
+
+`forge open` / `forge new` install that hook on the project’s local git config (`core.hooksPath` → `$SHIPYARD_HOME/githooks`, absolute), so every worktree of the repo—including Treehouse leases—gets the same enforcement without checking hooks into product repositories.

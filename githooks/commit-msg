@@ -1,0 +1,75 @@
+#!/usr/bin/env python3
+"""Normalize Co-Authored-By trailers on every commit.
+
+Requires AI-assisted commits that include any Co-Authored-By line to end with
+exactly one trailer in the form:
+
+  Co-Authored-By: ToolName Model <identifier@example.com>
+
+Cursor (and similar tools) often append a generic second trailer such as
+  Co-authored-by: Cursor <cursoragent@cursor.com>
+This hook drops extras and keeps a single well-formed trailer when present.
+"""
+
+from __future__ import annotations
+
+import re
+import sys
+from pathlib import Path
+
+TRAILER_RE = re.compile(r"(?i)^Co-Authored-By:\s*(.+?)\s*$")
+# ToolName Model <email> — two tokens before angle-bracket address
+VALID_VALUE_RE = re.compile(r"^(\S+)\s+(\S+)\s+<([^<>\s]+)>\s*$")
+
+
+def main() -> int:
+    if len(sys.argv) < 2:
+        print("commit-msg: missing message path", file=sys.stderr)
+        return 1
+
+    path = Path(sys.argv[1])
+    text = path.read_text(encoding="utf-8")
+    lines = text.splitlines()
+
+    trailers: list[tuple[int, str]] = []
+    for i, line in enumerate(lines):
+        m = TRAILER_RE.match(line)
+        if m:
+            trailers.append((i, m.group(1).strip()))
+
+    if not trailers:
+        return 0
+
+    valid: list[tuple[str, str, str]] = []
+    for _, value in trailers:
+        m = VALID_VALUE_RE.match(value)
+        if m:
+            valid.append((m.group(1), m.group(2), m.group(3)))
+
+    if not valid:
+        print(
+            "commit-msg: Co-Authored-By present but none match required form:\n"
+            "  Co-Authored-By: ToolName Model <identifier@example.com>\n"
+            "Add authorship with:\n"
+            '  git commit --trailer "Co-Authored-By: [ToolName] [Model] <[identifier]>"\n'
+            "See $SHIPYARD_HOME/AGENTS.md (Git Commit Trailers).",
+            file=sys.stderr,
+        )
+        return 1
+
+    tool, model, ident = valid[0]
+    canonical = f"Co-Authored-By: {tool} {model} <{ident}>"
+    trailer_idxs = {i for i, _ in trailers}
+    body = [line for i, line in enumerate(lines) if i not in trailer_idxs]
+
+    while body and body[-1].strip() == "":
+        body.pop()
+
+    body.append("")
+    body.append(canonical)
+    path.write_text("\n".join(body) + "\n", encoding="utf-8")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
