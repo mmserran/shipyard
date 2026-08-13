@@ -1,0 +1,192 @@
+#!/usr/bin/env bash
+
+set -euo pipefail
+
+show_help() {
+  cat <<'EOF'
+Usage:
+  browser <command> [arguments]
+
+Common commands:
+  open <url>                          Open a browser session at a URL
+  goto <url>                          Navigate the current page
+  snapshot                            Print an accessibility snapshot
+  click <ref> [button]                Click an element from the latest snapshot
+  fill <ref> <text> [--submit]        Fill an input
+  press <key>                         Press a keyboard key
+  hover <ref>                         Hover over an element
+  screenshot <name> [--full-page]     Save a named screenshot
+  console [min-level] [--clear]       Show browser console messages
+  requests [--filter <regex>]         Show network requests
+  close                               Close the current session
+  close-all                           Close all browser sessions
+  kill-all                            Force-kill stale/zombie browser processes
+  help                                Show this help message
+
+Any command also accepts Playwright CLI's own flags (e.g. --modifiers on
+click, --hires on screenshot). Run `browser <command> --help`
+to see the full option list for a given command.
+
+Screenshot examples:
+  browser screenshot homepage
+  browser screenshot homepage --full-page
+
+Screenshots are saved to:
+  artifacts/browser/screenshots/<name>.png
+
+Only screenshot has automatic artifact path handling. Other save-as
+commands (pdf, video-start, state-save, tracing-start/stop) use
+Playwright CLI's own defaults, which land under the gitignored
+.playwright-cli/ directory, not artifacts/browser/. Pass an explicit
+filename under artifacts/browser/<type>/ if you need one of those kept.
+
+Sessions persist across commands and conversations: a session left
+open by `open` (or ended abruptly) keeps its background browser
+process running until something closes it. Always `close` when a task
+finishes. If a command behaves as though a stale session already has
+navigation/auth state you didn't expect, run `list` to check, and
+`kill-all` to clear out anything stuck.
+
+Environment variables:
+  BROWSER_SESSION                Browser session name
+  BROWSER_ARTIFACT_DIR           Override the browser artifact root
+
+Examples:
+  browser open http://localhost:3000
+  browser snapshot
+  browser click e12
+  browser fill e18 "Mark Anthony Serrano"
+  browser screenshot homepage --full-page
+  browser console warning
+  browser close
+EOF
+}
+
+fail() {
+  echo "Error: $*" >&2
+  exit 1
+}
+
+command="${1:-}"
+
+case "$command" in
+  "" | help | --help | -h)
+    show_help
+    exit 0
+    ;;
+esac
+
+ROOT_DIR="$(git -C "$PWD" rev-parse --show-toplevel 2>/dev/null)" || fail \
+  "Not inside a git repository. Run browser from a product repo that has @playwright/cli installed."
+
+PLAYWRIGHT_CLI="$ROOT_DIR/node_modules/.bin/playwright-cli"
+CONFIG_FILE="$ROOT_DIR/.playwright/cli.config.json"
+
+ARTIFACT_ROOT="${BROWSER_ARTIFACT_DIR:-$ROOT_DIR/artifacts/browser}"
+SCREENSHOT_DIR="$ARTIFACT_ROOT/screenshots"
+TRACE_DIR="$ARTIFACT_ROOT/traces"
+CONSOLE_DIR="$ARTIFACT_ROOT/console"
+NETWORK_DIR="$ARTIFACT_ROOT/network"
+DOWNLOAD_DIR="$ARTIFACT_ROOT/downloads"
+
+SESSION="${BROWSER_SESSION:-project}"
+
+validate_setup() {
+  [[ -x "$PLAYWRIGHT_CLI" ]] || fail \
+    "Playwright CLI was not found at $PLAYWRIGHT_CLI. Run npm install in the product repo."
+
+  [[ -f "$CONFIG_FILE" ]] || fail \
+    "Playwright config was not found at $CONFIG_FILE."
+}
+
+create_artifact_directories() {
+  mkdir -p \
+    "$SCREENSHOT_DIR" \
+    "$TRACE_DIR" \
+    "$CONSOLE_DIR" \
+    "$NETWORK_DIR" \
+    "$DOWNLOAD_DIR"
+}
+
+validate_artifact_name() {
+  local name="$1"
+
+  [[ -n "$name" ]] || fail "An artifact name is required."
+
+  if [[ "$name" == *"/"* || "$name" == *"\\"* ]]; then
+    fail "Artifact names must not contain directory paths."
+  fi
+
+  if [[ "$name" == "." || "$name" == ".." ]]; then
+    fail "Invalid artifact name: $name"
+  fi
+
+  if [[ "$name" == -* ]]; then
+    fail \
+      "Invalid artifact name: $name (looks like an option; put the name before any options, e.g. 'screenshot homepage --full-page')."
+  fi
+
+  if [[ ! "$name" =~ ^[A-Za-z0-9._-]+$ ]]; then
+    fail \
+      "Artifact names may contain only letters, numbers, dots, underscores, and hyphens."
+  fi
+}
+
+run_playwright() {
+  cd "$ROOT_DIR"
+
+  # --config is only accepted by commands that launch/attach a browser
+  # session (open, attach); every other subcommand rejects it outright.
+  case "${1:-}" in
+    open | attach)
+      exec "$PLAYWRIGHT_CLI" \
+        --config "$CONFIG_FILE" \
+        "$@"
+      ;;
+    *)
+      exec "$PLAYWRIGHT_CLI" "$@"
+      ;;
+  esac
+}
+
+case "$command" in
+  screenshot)
+    validate_setup
+    create_artifact_directories
+
+    shift
+
+    name="${1:-}"
+    [[ -n "$name" ]] || fail \
+      "Usage: browser screenshot <name> [options]"
+
+    shift
+
+    name="${name%.png}"
+    validate_artifact_name "$name"
+
+    filename="$SCREENSHOT_DIR/$name.png"
+
+    export PLAYWRIGHT_CLI_SESSION="$SESSION"
+
+    run_playwright \
+      screenshot \
+      --filename "$filename" \
+      "$@"
+    ;;
+
+  version | --version | -v)
+    validate_setup
+    run_playwright --version
+    ;;
+
+  *)
+    validate_setup
+    create_artifact_directories
+
+    export PLAYWRIGHT_CLI_SESSION="$SESSION"
+
+    shift
+    run_playwright "$command" "$@"
+    ;;
+esac

@@ -271,6 +271,8 @@ when the normalizer rewrites a message are documented in
 ## Architecture
 
 - `bin/forge` routes the CLI.
+- `bin/browser` drives the current product repo's Playwright CLI for agent
+  browser automation.
 - `shell/bash.sh` sets up a Shipyard shell, including the exit() guard that
   protects an intent window's lease from an accidental close.
 - `lib/session.sh` creates project sessions, leases worktrees, saves and
@@ -291,4 +293,6 @@ when the normalizer rewrites a message are documented in
   screenshot references left in a PR body.
 - `skills/publish-screenshots/SKILL.md` teaches agents when local visual
   evidence must be published.
+- `skills/browser/SKILL.md` teaches agents when and how to use the browser
+  command.
 - `tmux.conf` renders state and defines navigation and cleanup hooks.

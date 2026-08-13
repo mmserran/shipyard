@@ -2202,4 +2202,104 @@ fi
 }
 printf 'ok - shipyard_install_git_hooks installs into common hooks dir\n'
 
+# --- bin/browser ---
+browser_bin="$repo_root/bin/browser"
+browser_help="$("$browser_bin" --help)"
+[[ "$browser_help" == *"Usage:"$'\n'"  browser "* ]] || {
+    printf 'not ok - browser --help should document the bare command\n' >&2
+    exit 1
+}
+[[ "$browser_help" != *"./scripts/browser"* ]] || {
+    printf 'not ok - browser --help still mentions ./scripts/browser\n' >&2
+    exit 1
+}
+printf 'ok - browser --help documents the bare command\n'
+
+non_git="$test_tmp/not-a-repo"
+mkdir -p "$non_git"
+if (cd "$non_git" && "$browser_bin" snapshot) >"$test_tmp/browser-out" 2>"$test_tmp/browser-err"; then
+    printf 'not ok - browser should fail outside a git repository\n' >&2
+    exit 1
+fi
+grep -q 'Not inside a git repository' "$test_tmp/browser-err" || {
+    printf 'not ok - expected git-repo error from browser\n%s\n' \
+        "$(cat "$test_tmp/browser-err")" >&2
+    exit 1
+}
+printf 'ok - browser fails outside a git repository\n'
+
+empty_repo="$test_tmp/empty-repo"
+mkdir -p "$empty_repo"
+git init -q "$empty_repo"
+if (cd "$empty_repo" && "$browser_bin" snapshot) >"$test_tmp/browser-out" 2>"$test_tmp/browser-err"; then
+    printf 'not ok - browser should fail without Playwright CLI\n' >&2
+    exit 1
+fi
+grep -q 'Playwright CLI was not found' "$test_tmp/browser-err" || {
+    printf 'not ok - expected missing Playwright CLI error\n%s\n' \
+        "$(cat "$test_tmp/browser-err")" >&2
+    exit 1
+}
+printf 'ok - browser fails when Playwright CLI is missing\n'
+
+product_repo="$test_tmp/product-repo"
+playwright_log="$test_tmp/playwright.log"
+mkdir -p \
+    "$product_repo/node_modules/.bin" \
+    "$product_repo/.playwright" \
+    "$product_repo/subdir"
+git init -q "$product_repo"
+product_root="$(git -C "$product_repo" rev-parse --show-toplevel)"
+cat > "$product_repo/node_modules/.bin/playwright-cli" <<EOF
+#!/usr/bin/env bash
+{
+    printf 'cwd=%s\n' "\$PWD"
+    printf 'args=%s\n' "\$*"
+} > "$playwright_log"
+EOF
+chmod +x "$product_repo/node_modules/.bin/playwright-cli"
+printf '{}\n' > "$product_repo/.playwright/cli.config.json"
+
+if (cd "$product_repo" && "$browser_bin" snapshot) >"$test_tmp/browser-out" 2>"$test_tmp/browser-err"; then
+    :
+else
+    printf 'not ok - browser snapshot should invoke Playwright CLI\n%s\n' \
+        "$(cat "$test_tmp/browser-err")" >&2
+    exit 1
+fi
+assert_equal "$(grep '^cwd=' "$playwright_log")" "cwd=$product_root" \
+    "browser invokes Playwright under the product repo root"
+assert_equal "$(grep '^args=' "$playwright_log")" "args=snapshot" \
+    "browser snapshot forwards the command without --config"
+
+rm -f "$playwright_log"
+(cd "$product_repo/subdir" && "$browser_bin" open http://localhost:3000)
+assert_equal "$(grep '^cwd=' "$playwright_log")" "cwd=$product_root" \
+    "browser resolves the product repo from a subdirectory"
+assert_equal "$(grep '^args=' "$playwright_log")" \
+    "args=--config $product_root/.playwright/cli.config.json open http://localhost:3000" \
+    "browser open passes the product-repo Playwright config"
+
+rm -f "$playwright_log"
+(cd "$product_repo" && "$browser_bin" screenshot homepage --full-page)
+[[ -d "$product_root/artifacts/browser/screenshots" ]] || {
+    printf 'not ok - browser screenshot should create artifact directories\n' >&2
+    exit 1
+}
+assert_equal "$(grep '^args=' "$playwright_log")" \
+    "args=screenshot --filename $product_root/artifacts/browser/screenshots/homepage.png --full-page" \
+    "browser screenshot writes under the product repo artifact root"
+
+if (cd "$product_repo" && "$browser_bin" screenshot ../escape) \
+    >"$test_tmp/browser-out" 2>"$test_tmp/browser-err"; then
+    printf 'not ok - browser screenshot should reject path names\n' >&2
+    exit 1
+fi
+grep -q 'must not contain directory paths' "$test_tmp/browser-err" || {
+    printf 'not ok - expected path-rejection error from browser screenshot\n%s\n' \
+        "$(cat "$test_tmp/browser-err")" >&2
+    exit 1
+}
+printf 'ok - browser screenshot rejects directory paths in names\n'
+
 printf 'all tests passed\n'
