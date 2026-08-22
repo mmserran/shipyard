@@ -424,6 +424,58 @@ if git -C "$sync_worktree" symbolic-ref -q HEAD >/dev/null; then
 fi
 printf 'ok - synced worktree stays detached\n'
 
+env_project="$test_tmp/env-project"
+git init -q "$env_project"
+printf '.env*\n!.env.example\n' > "$env_project/.gitignore"
+printf 'SECRET=1\n' > "$env_project/.env"
+printf 'SECRET=2\n' > "$env_project/.env.local"
+printf 'SECRET=example\n' > "$env_project/.env.example"
+git -C "$env_project" add .gitignore .env.example
+git -C "$env_project" -c user.email=test@example.com -c user.name=test \
+    commit -q -m initial
+
+env_worktree="$test_tmp/env-worktree"
+mkdir -p "$env_worktree"
+printf 'PRE_EXISTING=1\n' > "$env_worktree/.env.local"
+
+shipyard_link_env_files "$env_project" "$env_worktree"
+
+assert_equal "$env_project/.env" "$(readlink "$env_worktree/.env" 2>/dev/null)" \
+    "shipyard_link_env_files symlinks a gitignored env file into the worktree"
+assert_equal "PRE_EXISTING=1" "$(cat "$env_worktree/.env.local")" \
+    "shipyard_link_env_files never clobbers a file already present in the worktree"
+if [[ -e "$env_worktree/.env.example" || -L "$env_worktree/.env.example" ]]; then
+    printf 'not ok - shipyard_link_env_files leaves tracked templates untouched\n' >&2
+    exit 1
+fi
+printf 'ok - shipyard_link_env_files leaves tracked templates untouched\n'
+
+env_worktree_empty="$test_tmp/env-worktree-empty"
+mkdir -p "$env_worktree_empty"
+env_project_empty="$test_tmp/env-project-empty"
+git init -q "$env_project_empty"
+shipyard_link_env_files "$env_project_empty" "$env_worktree_empty"
+assert_equal "0" "$(find "$env_worktree_empty" -mindepth 1 | wc -l | tr -d ' ')" \
+    "shipyard_link_env_files is a silent no-op when the project has no env files"
+
+# Under forge's errexit, a failed ln must not abort the caller — otherwise
+# shipyard_new can exit after treehouse get --lease and before
+# shipyard_record_lease, orphaning the lease with no pending window.
+env_worktree_ro="$test_tmp/env-worktree-ro"
+mkdir -p "$env_worktree_ro"
+chmod a-w "$env_worktree_ro"
+link_warn="$(shipyard_link_env_files "$env_project" "$env_worktree_ro" 2>&1)" || {
+    chmod u+w "$env_worktree_ro" 2>/dev/null || true
+    printf 'not ok - shipyard_link_env_files must not fail when ln cannot create a symlink\n' >&2
+    exit 1
+}
+chmod u+w "$env_worktree_ro"
+if [[ "$link_warn" != *"could not link"* ]]; then
+    printf 'not ok - shipyard_link_env_files warns when a symlink fails\n' >&2
+    exit 1
+fi
+printf 'ok - shipyard_link_env_files stays best-effort when ln fails under errexit\n'
+
 # A file rather than a variable: shipyard_reap now captures `treehouse
 # return`'s output via $(...), which runs this mock in a subshell, so a
 # plain variable assignment here wouldn't survive back to the assertions.
