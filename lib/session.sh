@@ -749,6 +749,34 @@ shipyard_sync_worktree() {
     git -C "$worktree" checkout --quiet --detach "origin/$base_branch" 2>/dev/null || return 1
 }
 
+# Gitignored env files (.env, .env.local, .env.production, ...) live only in
+# project_root and never make it into a freshly leased Treehouse worktree.
+# Symlink them in so a dev server/test/build in the intent window has real
+# secrets to read, without duplicating them (a copy would drift out of sync
+# across repeated `forge new` calls against the same worktree slot).
+shipyard_link_env_files() {
+    local project_root="$1"
+    local worktree="$2"
+    local source_file
+    local name
+
+    [[ -n "$project_root" && -n "$worktree" ]] || return 0
+    [[ "$project_root" != "$worktree" ]] || return 0
+
+    for source_file in "$project_root"/.env*; do
+        [[ -e "$source_file" ]] || continue
+        name="$(basename "$source_file")"
+
+        # Only gitignored files are real secrets; tracked templates like
+        # .env.example must be left untouched rather than symlinked over.
+        git -C "$project_root" check-ignore --quiet "$source_file" || continue
+
+        [[ -e "$worktree/$name" || -L "$worktree/$name" ]] && continue
+
+        ln -s "$source_file" "$worktree/$name"
+    done
+}
+
 shipyard_new() {
     local intent="${*:-}"
     local project_root
@@ -804,6 +832,8 @@ shipyard_new() {
     else
         printf 'forge: warning: could not determine origin'"'"'s default branch; continuing with the worktree'"'"'s current checkout\n' >&2
     fi
+
+    shipyard_link_env_files "$project_root" "$worktree"
 
     lease_id="$(sed -n 's/.*"lease_id"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' <<<"$lease_json")"
     if [[ -z "$lease_id" ]]; then
