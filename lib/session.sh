@@ -773,7 +773,10 @@ shipyard_link_env_files() {
 
         [[ -e "$worktree/$name" || -L "$worktree/$name" ]] && continue
 
-        ln -s "$source_file" "$worktree/$name"
+        if ! ln -s "$source_file" "$worktree/$name" 2>/dev/null; then
+            printf 'forge: warning: could not link %s into the worktree\n' "$name" >&2
+            continue
+        fi
     done
 }
 
