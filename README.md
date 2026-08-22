@@ -38,18 +38,22 @@ Shipyard:
 2. leases a pre-warmed Treehouse worktree;
 3. refreshes that worktree to a detached checkout of the remote's current
    default-branch tip when the remote is available;
-4. creates an intent window rooted in that worktree, split into a top pane
+4. symlinks any gitignored `.env*` files from the project root into that
+   worktree (tracked templates such as `.env.example`, and any path already
+   present in the worktree, are left alone);
+5. creates an intent window rooted in that worktree, split into a top pane
    (75% of the height) for the main work and a bottom pane (25%) for a
    secondary tool, with focus on the top pane;
-5. ensures the leftmost repo-named Yazi window exists so the status bar keeps
+6. ensures the leftmost repo-named Yazi window exists so the status bar keeps
    a clickable repository label even before `forge open`;
-6. records lease identity for cleanup and a durable intent manifest for
+7. records lease identity for cleanup and a durable intent manifest for
    restore after tmux loss;
-7. starts a state watcher; and
-8. opens an ordinary shell without starting an agent.
+8. starts a state watcher; and
+9. opens an ordinary shell without starting an agent.
 
 If the remote's default branch cannot be resolved or fetched, `forge new`
-warns and continues from the worktree's existing checkout.
+warns and continues from the worktree's existing checkout. If an env file
+cannot be linked, `forge new` warns and continues without it.
 
 The first unit creates the project session directly. Run the agent or
 development command of your choice from the new shell.
