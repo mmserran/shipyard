@@ -35,9 +35,10 @@ Usage:
                        window, and command window. With no path, instead
                        restores paused repository sessions and every leased
                        intent window after a pause or tmux server loss
-  forge new <intent>  Create an intent window in a leased Treehouse worktree.
-                       Commas split the input into multiple intents, one
-                       window each: forge new issue 1, issue 2, issue 3
+  forge new <intent>[, <intent>...]
+                       Create intent window(s) in leased Treehouse worktrees.
+                       Commas split the input without quoting, for example:
+                       forge new issue 1, issue 2, issue 3
   forge close         Force-close this window: abort any active no-mistakes
                        run for it, discard uncommitted changes, and return
                        the Treehouse lease. On a repo's command window,
