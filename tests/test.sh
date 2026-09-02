@@ -1126,6 +1126,102 @@ assert_equal "$repo_root|lease-failure" \
     "$(cat "$returned_lease_file" 2>/dev/null)" \
     "failed tmux setup returns its pending lease"
 
+# Multi-intent: commas split `forge new` input into one window per intent,
+# each with its own Treehouse lease, and focus lands on the first created
+# window. The counter lives in a file because `treehouse get` runs inside a
+# $(...) subshell, so a variable increment would not survive back here.
+multi_lease_counter="$test_tmp/multi-lease-counter"
+: > "$multi_lease_counter"
+treehouse() {
+    case "$1" in
+        get)
+            if [[ "${5:-}" == *"lease denied"* ]]; then
+                return 1
+            fi
+            printf 'x' >> "$multi_lease_counter"
+            printf '{"path":"%s","lease_id":"lease-multi-%s"}\n' \
+                "$repo_root" "$(wc -c < "$multi_lease_counter" | tr -d ' ')"
+            ;;
+        return)
+            printf '%s|%s' "$2" "$4" > "$returned_lease_file"
+            ;;
+    esac
+}
+
+switch_client_target=""
+TMUX="test" shipyard_new fix alpha task ,  fix beta task,fix gamma task
+multi_alpha_window="$(tmux list-windows -a -F '#{window_name} #{window_id}' |
+    sed -n 's/^fix alpha task //p')"
+multi_beta_window="$(tmux list-windows -a -F '#{window_name} #{window_id}' |
+    sed -n 's/^fix beta task //p')"
+multi_gamma_window="$(tmux list-windows -a -F '#{window_name} #{window_id}' |
+    sed -n 's/^fix gamma task //p')"
+if [[ -z "$multi_alpha_window" || -z "$multi_beta_window" || -z "$multi_gamma_window" ]]; then
+    printf 'not ok - comma-separated intents each open a trimmed-title window\n' >&2
+    exit 1
+fi
+printf 'ok - comma-separated intents each open a trimmed-title window\n'
+assert_equal "3" "$(wc -c < "$multi_lease_counter" | tr -d ' ')" \
+    "each intent takes its own Treehouse lease"
+assert_equal "lease-multi-1" \
+    "$(tmux show-options -wqv -t "$multi_alpha_window" @shipyard_lease_id)" \
+    "intents are created in the order they were listed"
+assert_equal "lease-multi-3" \
+    "$(tmux show-options -wqv -t "$multi_gamma_window" @shipyard_lease_id)" \
+    "every intent window records its own lease id"
+assert_equal "$multi_alpha_window" "$switch_client_target" \
+    "multi-intent forge new focuses the first created window"
+
+multi_window_count_before="$(tmux list-windows -a | wc -l | tr -d ' ')"
+TMUX="test" shipyard_new solo comma intent , ,
+multi_window_count_after="$(tmux list-windows -a | wc -l | tr -d ' ')"
+assert_equal "$((multi_window_count_before + 1))" "$multi_window_count_after" \
+    "empty comma segments are skipped"
+
+multi_usage_status=0
+multi_usage="$(TMUX="test" shipyard_new " , ," 2>&1)" || multi_usage_status=$?
+assert_equal "2" "$multi_usage_status" \
+    "an all-empty intent list fails like a missing intent"
+case "$multi_usage" in
+    *"usage: forge new"*)
+        printf 'ok - an all-empty intent list prints usage\n'
+        ;;
+    *)
+        printf 'not ok - an all-empty intent list prints usage\n%s\n' "$multi_usage" >&2
+        exit 1
+        ;;
+esac
+
+switch_client_target=""
+if TMUX="test" shipyard_new first good intent, lease denied here, never created intent; then
+    printf 'not ok - multi-intent stops at the first failing intent\n' >&2
+    exit 1
+fi
+printf 'ok - multi-intent stops at the first failing intent\n'
+if tmux list-windows -a -F '#{window_name}' | grep -Fxq 'never created intent'; then
+    printf 'not ok - intents after a failure are not created\n' >&2
+    exit 1
+fi
+printf 'ok - intents after a failure are not created\n'
+if tmux list-windows -a -F '#{window_name}' | grep -Fxq 'first good intent'; then
+    printf 'ok - windows created before a failure stay open\n'
+else
+    printf 'not ok - windows created before a failure stay open\n' >&2
+    exit 1
+fi
+assert_equal "" "$switch_client_target" \
+    "a failed multi-intent run does not attach"
+
+# Drop the extra windows and their records so the later pause/restore tests
+# only see the intents they stage themselves.
+multi_extra_windows="$(tmux list-windows -a -F '#{window_name}|#{window_id}' |
+    sed -n 's/^\(fix alpha task\|fix beta task\|fix gamma task\|solo comma intent\|first good intent\)|//p')"
+for multi_window in $multi_extra_windows; do
+    tmux kill-window -t "$multi_window" 2>/dev/null || true
+done
+rm -f "$(shipyard_state_home)/windows/lease-multi-"*.lease
+rm -f "$(shipyard_state_home)/intents/lease-multi-"*.intent
+
 watch_iterations=0
 watcher_window_exists() {
     ((watch_iterations++ == 0))

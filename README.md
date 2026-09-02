@@ -58,6 +58,20 @@ cannot be linked, `forge new` warns and continues without it.
 The first unit creates the project session directly. Run the agent or
 development command of your choice from the new shell.
 
+Commas split the input into multiple intents, each getting its own leased
+worktree and window through the same steps, with focus landing on the first
+one. No quoting is needed -- the shell passes commas through untouched:
+
+```bash
+forge new issue 1, issue 2, issue 3
+```
+
+Whitespace around each comma is trimmed and empty segments are skipped; if
+every segment is empty, `forge new` prints usage and exits. A comma always
+splits, so a single intent's title cannot contain one. If an intent fails to
+set up, `forge new` stops there, leaves already-created windows open, and
+does not attach.
+
 Closing a clean window returns its Treehouse lease. If automatic cleanup
 cannot return a lease, Shipyard keeps the cleanup record and retries during
 the next `forge new`.
@@ -248,7 +262,7 @@ does not repair PR comments or non-image local links.
 forge             # attach to a pre-existing shipyard window, if one is open
 forge open [path]  # open/create the repo's Yazi and command windows
 forge open        # no path: restore paused sessions and intents
-forge new <intent>
+forge new <intent>[, <intent>...]  # commas split into one window per intent
 forge close  # close one intent, or the whole repo from its command window
 forge pause  # save and close every open repo/intent window, keeping leases
 forge build  # manually override the state to building

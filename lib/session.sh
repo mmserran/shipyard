@@ -780,8 +780,12 @@ shipyard_link_env_files() {
     done
 }
 
-shipyard_new() {
-    local intent="${*:-}"
+# Creates one intent window in its own leased Treehouse worktree. Reports
+# the created window through SHIPYARD_NEW_WINDOW_ID/SHIPYARD_NEW_SESSION_NAME
+# instead of attaching, so shipyard_new can decide where focus lands after
+# every requested intent exists.
+shipyard_new_intent() {
+    local intent="$1"
     local project_root
     local session_name
     local lease_holder
@@ -794,11 +798,6 @@ shipyard_new() {
     local base_head
     local base_branch
     local top_pane_id
-
-    if [[ -z "$intent" ]]; then
-        printf 'forge: usage: forge new <intent>\n' >&2
-        return 2
-    fi
 
     project_root="$(shipyard_project_root "$PWD")" || return
     if ! command -v tmux >/dev/null 2>&1; then
@@ -895,11 +894,50 @@ shipyard_new() {
     watcher_command="$(shipyard_watcher_command "$window_id" "$worktree")"
     tmux run-shell -b "$watcher_command"
 
+    SHIPYARD_NEW_WINDOW_ID="$window_id"
+    SHIPYARD_NEW_SESSION_NAME="$session_name"
+}
+
+# Splits its input on ',' so `forge new issue 1, issue 2` opens one intent
+# window per segment -- a comma, unlike a semicolon, passes through the
+# user's shell without quoting. Stops at the first intent that fails to set
+# up, leaving any earlier windows open, and only attaches -- to the first
+# created window -- once every requested intent exists.
+shipyard_new() {
+    local raw="${*:-}"
+    local segment
+    local intent
+    local focus_window_id=""
+    local focus_session_name=""
+    local -a segments=()
+    local -a intents=()
+
+    IFS=',' read -ra segments <<<"$raw"
+    for segment in "${segments[@]}"; do
+        intent="${segment#"${segment%%[![:space:]]*}"}"
+        intent="${intent%"${intent##*[![:space:]]}"}"
+        [[ -n "$intent" ]] || continue
+        intents+=("$intent")
+    done
+
+    if [[ ${#intents[@]} -eq 0 ]]; then
+        printf 'forge: usage: forge new <intent>[, <intent>...]\n' >&2
+        return 2
+    fi
+
+    for intent in "${intents[@]}"; do
+        shipyard_new_intent "$intent" || return
+        if [[ -z "$focus_window_id" ]]; then
+            focus_window_id="$SHIPYARD_NEW_WINDOW_ID"
+            focus_session_name="$SHIPYARD_NEW_SESSION_NAME"
+        fi
+    done
+
     if [[ -n "${TMUX:-}" ]]; then
-        tmux switch-client -t "$window_id"
+        tmux switch-client -t "$focus_window_id"
     else
-        tmux select-window -t "$window_id"
-        tmux attach-session -t "=$session_name"
+        tmux select-window -t "$focus_window_id"
+        tmux attach-session -t "=$focus_session_name"
     fi
 }
 
