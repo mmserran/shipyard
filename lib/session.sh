@@ -47,8 +47,10 @@ shipyard_session_name() {
 
 # Read a session option by exact session name. `tmux show-options -t name`
 # prefix-matches (so `demo-repo` can return `demo-repo-only`'s value), and
-# `show-options`/`set-option` do not honor the `=` exact-target syntax that
-# `has-session` does. Listing sessions and filtering avoids both traps.
+# bare `=name` is not reliable for show-options the way it is for has-session.
+# Listing sessions and filtering avoids both traps when reading. Writers set
+# `@shipyard_project_root` with `set-option -t =$session_name:` (exact session
+# plus window form) so a prefix-colliding sibling cannot receive the option.
 shipyard_session_option() {
     local session_name="$1"
     local option="$2"
