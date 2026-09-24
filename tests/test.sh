@@ -1096,7 +1096,7 @@ else
 fi
 intent_session="$(tmux display-message -p -t "$intent_window" '#{session_name}')"
 assert_equal "$(shipyard_project_root "$repo_root")" \
-    "$(tmux show-options -qv -t "$intent_session" @shipyard_project_root)" \
+    "$(tmux show-options -qv -t "=$intent_session:" @shipyard_project_root)" \
     "session records its canonical repository"
 intent_repo_window="$(shipyard_repo_window "$intent_session")"
 assert_equal "repo" \
@@ -1986,7 +1986,7 @@ case "$pause_collide_b_session" in
 esac
 TMUX="test" shipyard_open "$pause_collide_b"
 assert_equal "$(shipyard_project_root "$pause_collide_b")" \
-    "$(tmux show-options -qv -t "$pause_collide_b_session" @shipyard_project_root)" \
+    "$(tmux show-options -qv -t "=$pause_collide_b_session:" @shipyard_project_root)" \
     "a later open of a same-basename project lands in a digested session"
 if [[ ! -e "$(shipyard_project_file "$pause_collide_session")" ]]; then
     printf 'not ok - opening another same-basename project must leave the paused manifest alone\n' >&2
@@ -2060,7 +2060,7 @@ case "$pause_intent_collide_b_session" in
 esac
 TMUX="test" shipyard_open "$pause_intent_collide_b"
 assert_equal "$(shipyard_project_root "$pause_intent_collide_b")" \
-    "$(tmux show-options -qv -t "$pause_intent_collide_b_session" @shipyard_project_root)" \
+    "$(tmux show-options -qv -t "=$pause_intent_collide_b_session:" @shipyard_project_root)" \
     "a later open of a same-basename project lands in a digested session for intent collision"
 restore_intent_collide_status=0
 TMUX="test" shipyard_restore >/dev/null || restore_intent_collide_status=$?
@@ -2075,7 +2075,7 @@ if [[ "$misplaced_intent" -ne 0 ]]; then
     exit 1
 fi
 assert_equal "$(shipyard_project_root "$pause_intent_collide_a")" \
-    "$(tmux show-options -qv -t "$pause_intent_collide_session" @shipyard_project_root)" \
+    "$(tmux show-options -qv -t "=$pause_intent_collide_session:" @shipyard_project_root)" \
     "paused intent restore recreates the original short-name session"
 restored_intent="$(tmux list-windows -t "=$pause_intent_collide_session" \
     -F '#{@shipyard_lease_id}' 2>/dev/null | grep -c '^lease-intent-collide$' || true)"
@@ -2184,12 +2184,92 @@ if shipyard_ensure_project_session \
     exit 1
 fi
 assert_equal "$(shipyard_project_root "$pause_intent_steal_b")" \
-    "$(tmux show-options -qv -t "$pause_intent_steal_session" @shipyard_project_root)" \
+    "$(tmux show-options -qv -t "=$pause_intent_steal_session:" @shipyard_project_root)" \
     "ensure leaves a foreign session root unchanged when refusing to join"
 printf 'ok - intent restore and ensure refuse paused/foreign short-name ownership\n'
 tmux kill-session -t "=$pause_intent_steal_session" 2>/dev/null || true
 rm -f "$(shipyard_project_file "$pause_intent_steal_session")"
 shipyard_forget_intent lease-intent-steal
+
+# A crash right after `forge pause` can leave a zero-length project manifest.
+# It must not read as a paused-project reservation, and bare `forge open`
+# (which runs under errexit) must discard it instead of aborting.
+rm -f "$(shipyard_state_home)"/intents/*.intent 2>/dev/null || true
+rm -f "$(shipyard_state_home)"/projects/*.project 2>/dev/null || true
+empty_manifest_repo="$test_tmp/empty-manifest/app"
+mkdir -p "$(dirname "$empty_manifest_repo")"
+git init -q "$empty_manifest_repo"
+git -C "$empty_manifest_repo" -c user.email=test@example.com -c user.name=test \
+    commit -q --allow-empty -m initial
+empty_manifest_root="$(shipyard_project_root "$empty_manifest_repo")"
+empty_manifest_session="$(shipyard_session_name "$empty_manifest_root")"
+tmux kill-session -t "=$empty_manifest_session" 2>/dev/null || true
+shipyard_record_intent "lease-empty-manifest" "$empty_manifest_root" \
+    "$empty_manifest_session" "empty manifest work" \
+    "$empty_manifest_repo" "shipyard:$empty_manifest_session:empty manifest work" \
+    "abc123" "main"
+mkdir -p "$(shipyard_state_home)/projects"
+: > "$(shipyard_project_file "$empty_manifest_session")"
+treehouse() {
+    case "$1" in
+        status)
+            printf '[{"path":"%s","status":"leased","lease_id":"lease-empty-manifest"}]\n' \
+                "$empty_manifest_repo"
+            ;;
+    esac
+}
+assert_equal "$empty_manifest_session" \
+    "$(shipyard_session_for_project "$empty_manifest_root")" \
+    "an empty project manifest does not push a project onto a digested session"
+empty_manifest_status=0
+# errexit is ignored on the left of `||`, so capture the status with it on.
+set +o errexit
+( set -o errexit; TMUX="test" shipyard_restore >/dev/null 2>&1 )
+empty_manifest_status=$?
+set -o errexit
+if [[ "$empty_manifest_status" -ne 0 ]]; then
+    printf 'not ok - forge open must not fail on an empty project manifest (status %s)\n' \
+        "$empty_manifest_status" >&2
+    exit 1
+fi
+if [[ -e "$(shipyard_project_file "$empty_manifest_session")" ]]; then
+    printf 'not ok - forge open must discard an empty project manifest\n' >&2
+    exit 1
+fi
+restored_empty_manifest="$(tmux list-windows -t "=$empty_manifest_session" \
+    -F '#{@shipyard_lease_id}' 2>/dev/null | grep -c '^lease-empty-manifest$' || true)"
+assert_equal "1" "$restored_empty_manifest" \
+    "an empty project manifest does not block restoring its intent"
+printf 'ok - forge open recovers from an empty project manifest\n'
+tmux kill-session -t "=$empty_manifest_session" 2>/dev/null || true
+shipyard_forget_intent lease-empty-manifest
+
+# Zero-length lease and intent files (same crash window) must not abort
+# errexit callers or fail every later retry.
+: > "$(shipyard_state_home)/windows/lease-empty-record.lease"
+: > "$(shipyard_intent_file lease-empty-intent)"
+empty_record_status=0
+set +o errexit
+( set -o errexit; shipyard_reconcile >/dev/null 2>&1 )
+empty_record_status=$?
+set -o errexit
+if [[ "$empty_record_status" -ne 0 ]]; then
+    printf 'not ok - reconcile must not abort on an empty lease record\n' >&2
+    exit 1
+fi
+if [[ -e "$(shipyard_state_home)/windows/lease-empty-record.lease" ]]; then
+    printf 'not ok - reconcile must discard an empty lease record\n' >&2
+    exit 1
+fi
+set +o errexit
+( set -o errexit; TMUX="test" shipyard_restore >/dev/null 2>&1 )
+set -o errexit
+if [[ -e "$(shipyard_intent_file lease-empty-intent)" ]]; then
+    printf 'not ok - forge open must move an invalid intent manifest aside\n' >&2
+    exit 1
+fi
+rm -f "$(shipyard_intent_file lease-empty-intent).invalid"
+printf 'ok - empty lease and intent records do not wedge reconcile or restore\n'
 
 # Session names where one is a prefix of another (demo-repo vs demo-repo-only)
 # must not confuse tmux's default prefix matching during pause/restore.
