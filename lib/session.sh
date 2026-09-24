@@ -47,8 +47,10 @@ shipyard_session_name() {
 
 # Read a session option by exact session name. `tmux show-options -t name`
 # prefix-matches (so `demo-repo` can return `demo-repo-only`'s value), and
-# `show-options`/`set-option` do not honor the `=` exact-target syntax that
-# `has-session` does. Listing sessions and filtering avoids both traps.
+# bare `=name` is not reliable for show-options the way it is for has-session.
+# Listing sessions and filtering avoids both traps when reading. Writers set
+# `@shipyard_project_root` with `set-option -t =$session_name:` (exact session
+# plus window form) so a prefix-colliding sibling cannot receive the option.
 shipyard_session_option() {
     local session_name="$1"
     local option="$2"
@@ -84,7 +86,7 @@ shipyard_session_for_project() {
 
     project_file="$(shipyard_project_file "$digested_name")"
     if [[ -f "$project_file" ]]; then
-        IFS=$'\t' read -r recorded_session recorded_root < "$project_file"
+        IFS=$'\t' read -r recorded_session recorded_root < "$project_file" || true
         if [[ "$recorded_root" == "$project_root" ]]; then
             printf '%s\n' "${recorded_session:-$digested_name}"
             return
@@ -92,7 +94,7 @@ shipyard_session_for_project() {
     fi
     project_file="$(shipyard_project_file "$session_name")"
     if [[ -f "$project_file" ]]; then
-        IFS=$'\t' read -r recorded_session recorded_root < "$project_file"
+        IFS=$'\t' read -r recorded_session recorded_root < "$project_file" || true
         if [[ "$recorded_root" == "$project_root" ]]; then
             printf '%s\n' "${recorded_session:-$session_name}"
             return
@@ -101,7 +103,7 @@ shipyard_session_for_project() {
     state_home="$(shipyard_state_home)"
     for project_file in "$state_home"/projects/*.project; do
         [[ -e "$project_file" ]] || continue
-        IFS=$'\t' read -r recorded_session recorded_root < "$project_file"
+        IFS=$'\t' read -r recorded_session recorded_root < "$project_file" || true
         if [[ -n "$recorded_session" && "$recorded_root" == "$project_root" ]]; then
             printf '%s\n' "$recorded_session"
             return
@@ -112,7 +114,7 @@ shipyard_session_for_project() {
         printf '%s\n' "$digested_name"
         return
     fi
-    if [[ -f "$(shipyard_project_file "$session_name")" ]]; then
+    if [[ -s "$(shipyard_project_file "$session_name")" ]]; then
         printf '%s\n' "$digested_name"
         return
     fi
@@ -197,7 +199,7 @@ shipyard_ensure_project_session() {
             -s "$session_name" -n "$session_name" -c "$project_root" yazi)"; then
             return 1
         fi
-        tmux set-option -t "$session_name" @shipyard_project_root "$project_root"
+        tmux set-option -t "=$session_name:" @shipyard_project_root "$project_root"
         tmux set-option -w -t "$repo_window_id" @shipyard_role repo
     else
         existing_root="$(shipyard_session_option "$session_name" @shipyard_project_root 2>/dev/null)"
@@ -318,6 +320,9 @@ shipyard_record_intent() {
     printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
         "$lease_id" "$project_root" "$session_name" "$intent" "$worktree" \
         "$lease_holder" "$base_head" "$base_branch" "$agent" > "$temporary_file"
+    # Flush before the rename: without it a crash can persist the rename
+    # but not the data, leaving a zero-length manifest.
+    sync "$temporary_file" 2>/dev/null || true
     mv -f "$temporary_file" "$intent_file"
 }
 
@@ -348,6 +353,9 @@ shipyard_record_project() {
     project_file="$(shipyard_project_file "$session_name")"
     temporary_file="${project_file}.tmp.$$"
     printf '%s\t%s\n' "$session_name" "$project_root" > "$temporary_file"
+    # Flush before the rename: without it a crash can persist the rename
+    # but not the data, leaving a zero-length manifest.
+    sync "$temporary_file" 2>/dev/null || true
     mv -f "$temporary_file" "$project_file"
 }
 
@@ -360,7 +368,7 @@ shipyard_forget_project() {
 
     project_file="$(shipyard_project_file "$session_name")"
     [[ -f "$project_file" ]] || return 0
-    IFS=$'\t' read -r recorded_session recorded_root < "$project_file"
+    IFS=$'\t' read -r recorded_session recorded_root < "$project_file" || true
     live_root="$(shipyard_session_option "$session_name" @shipyard_project_root 2>/dev/null)"
     if [[ -n "$recorded_root" && -n "$live_root" && "$recorded_root" == "$live_root" ]]; then
         rm -f "$project_file"
@@ -382,7 +390,7 @@ shipyard_snapshot_agent() {
     if [[ ! -f "$intent_file" ]]; then
         lease_file="$(shipyard_state_home)/windows/${lease_id}.lease"
         [[ -f "$lease_file" ]] || return 0
-        IFS=$'\t' read -r recorded_window_id worktree recorded_lease_id lease_holder < "$lease_file"
+        IFS=$'\t' read -r recorded_window_id worktree recorded_lease_id lease_holder < "$lease_file" || true
         [[ "$recorded_window_id" == "$window_id" && "$recorded_lease_id" == "$lease_id" ]] || return 0
         session_name="$(tmux display-message -p -t "$window_id" '#{session_name}' 2>/dev/null)"
         project_root="$(shipyard_session_option "$session_name" @shipyard_project_root 2>/dev/null)"
@@ -400,7 +408,8 @@ shipyard_snapshot_agent() {
         codex|claude|cursor-agent) ;;
         *) return 0 ;;
     esac
-    IFS=$'\t' read -r -a fields < "$intent_file"
+    IFS=$'\t' read -r -a fields < "$intent_file" || true
+    [[ -n "${fields[0]:-}" ]] || return 0
     [[ "${fields[8]:-}" == "$agent" ]] && return 0
     shipyard_record_intent "${fields[0]}" "${fields[1]}" "${fields[2]}" \
         "${fields[3]}" "${fields[4]}" "${fields[5]}" "${fields[6]}" \
@@ -444,9 +453,12 @@ shipyard_restore_intent() {
     local project_file paused_root
 
     IFS=$'\t' read -r lease_id project_root session_name intent worktree lease_holder \
-        base_head base_branch agent < "$intent_file"
+        base_head base_branch agent < "$intent_file" || true
     [[ -n "$lease_id" && -n "$project_root" && -n "$session_name" && -n "$intent" && -n "$worktree" ]] || {
-        printf 'forge: invalid intent manifest: %s\n' "$intent_file" >&2
+        # Move it aside (out of the *.intent glob) so every later restore
+        # doesn't fail on the same unrecoverable record.
+        mv -f "$intent_file" "${intent_file}.invalid"
+        printf 'forge: invalid intent manifest moved aside: %s.invalid\n' "$intent_file" >&2
         return 1
     }
     [[ "$base_head" == "-" ]] && base_head=""
@@ -471,8 +483,10 @@ shipyard_restore_intent() {
     if ! tmux has-session -t "=$session_name" 2>/dev/null; then
         project_file="$(shipyard_project_file "$session_name")"
         if [[ -f "$project_file" ]]; then
-            IFS=$'\t' read -r _ paused_root < "$project_file"
-            if [[ -z "$paused_root" || "$paused_root" != "$project_root" ]]; then
+            IFS=$'\t' read -r _ paused_root < "$project_file" || true
+            # An empty root means a corrupt (e.g. zero-length after a crash)
+            # manifest, not a reservation; the project loop below discards it.
+            if [[ -n "$paused_root" && "$paused_root" != "$project_root" ]]; then
                 printf 'forge: cannot restore %s: session %s is reserved by a paused project; leaving manifest for a later retry\n' \
                     "$intent" "$session_name" >&2
                 return 1
@@ -480,7 +494,7 @@ shipyard_restore_intent() {
         fi
         window_id="$(tmux new-session -d -P -F '#{window_id}' \
             -s "$session_name" -n "$intent" -c "$worktree")" || return
-        tmux set-option -t "$session_name" @shipyard_project_root "$project_root"
+        tmux set-option -t "=$session_name:" @shipyard_project_root "$project_root"
     else
         existing_root="$(shipyard_session_option "$session_name" @shipyard_project_root 2>/dev/null)"
         if [[ "$existing_root" != "$project_root" ]]; then
@@ -554,7 +568,9 @@ shipyard_restore() {
     for project_file in "$state_home"/projects/*.project; do
         [[ -e "$project_file" ]] || continue
         found_project=1
-        IFS=$'\t' read -r session_name project_root < "$project_file"
+        # `|| true`: read fails on a zero-length file, which errexit would
+        # otherwise turn into an abort before the corrupt record is removed.
+        IFS=$'\t' read -r session_name project_root < "$project_file" || true
         if [[ -z "$session_name" || -z "$project_root" ]]; then
             rm -f "$project_file"
             continue
@@ -670,11 +686,17 @@ shipyard_record_lease() {
     local lease_id="$3"
     local lease_holder="$4"
     local state_home
+    local lease_file
+    local temporary_file
 
     state_home="$(shipyard_state_home)"
     mkdir -p "$state_home/windows"
+    lease_file="$state_home/windows/${lease_id}.lease"
+    temporary_file="${lease_file}.tmp.$$"
     printf '%s\t%s\t%s\t%s\n' "$window_id" "$path" "$lease_id" "$lease_holder" \
-        > "$state_home/windows/${lease_id}.lease"
+        > "$temporary_file"
+    sync "$temporary_file" 2>/dev/null || true
+    mv -f "$temporary_file" "$lease_file"
 }
 
 # Removes a window's own lease-tracking record, without touching Treehouse.
@@ -690,7 +712,7 @@ shipyard_forget_lease() {
 
     for lease_file in "$(shipyard_state_home)/windows"/*.lease; do
         [[ -e "$lease_file" ]] || continue
-        IFS=$'\t' read -r recorded_window_id _ lease_id _ < "$lease_file"
+        IFS=$'\t' read -r recorded_window_id _ lease_id _ < "$lease_file" || true
         if [[ "$recorded_window_id" == "$window_id" ]]; then
             rm -f "$lease_file"
             shipyard_forget_intent "$lease_id"
@@ -712,7 +734,7 @@ shipyard_disarm_lease() {
 
     for lease_file in "$(shipyard_state_home)/windows"/*.lease; do
         [[ -e "$lease_file" ]] || continue
-        IFS=$'\t' read -r recorded_window_id _ < "$lease_file"
+        IFS=$'\t' read -r recorded_window_id _ < "$lease_file" || true
         [[ "$recorded_window_id" == "$window_id" ]] && rm -f "$lease_file"
     done
     return 0
@@ -861,7 +883,7 @@ shipyard_new_intent() {
             shipyard_reap "$pending_window_id" || true
             return 1
         fi
-        tmux set-option -t "$session_name" @shipyard_project_root "$project_root"
+        tmux set-option -t "=$session_name:" @shipyard_project_root "$project_root"
     else
         if ! window_id="$(tmux new-window -d -P -F '#{window_id}' \
             -t "=$session_name:" -n "$intent" -c "$worktree")"; then
@@ -1096,7 +1118,7 @@ shipyard_reap() {
 
     for lease_file in "$(shipyard_state_home)"/windows/*.lease; do
         [[ -e "$lease_file" ]] || continue
-        IFS=$'\t' read -r recorded_window_id path lease_id lease_holder < "$lease_file"
+        IFS=$'\t' read -r recorded_window_id path lease_id lease_holder < "$lease_file" || true
         [[ "$recorded_window_id" == "$window_id" ]] || continue
         # Without --force, `treehouse return` exits 0 even when it declines
         # (uncommitted changes, no TTY to answer "Clean and return?") --
@@ -1138,7 +1160,13 @@ shipyard_reconcile() {
     mkdir -p "$state_home/windows"
     for lease_file in "$state_home"/windows/*.lease; do
         [[ -e "$lease_file" ]] || continue
-        IFS=$'\t' read -r window_id _ lease_id _ < "$lease_file"
+        IFS=$'\t' read -r window_id _ lease_id _ < "$lease_file" || true
+        # A record missing its IDs (e.g. zero-length after a crash) can never
+        # be matched or reaped; drop it rather than retrying it forever.
+        if [[ -z "$window_id" || -z "$lease_id" ]]; then
+            rm -f "$lease_file"
+            continue
+        fi
         # Intent remaining means no reap has claimed this window yet
         # (reboot / tmux loss). Preserve for bare `forge open` (restore).
         # After a normal window-unlinked reap, the intent is cleared even if
