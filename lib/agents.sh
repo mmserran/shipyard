@@ -180,3 +180,19 @@ agents_orchestrator_live() {
         -F '#{@shipyard_main_pane}|#{pane_current_command}' 2>/dev/null |
         grep -Fxq '1|claude'
 }
+
+# True while the window's main pane runs some other agent or program (Codex,
+# Cursor, an editor...) rather than Claude Code or an idle shell, so a stale
+# Claude transcript says nothing about this window.
+agents_other_program_live() {
+    local window_id="$1"
+    local command
+
+    command="$(tmux list-panes -t "$window_id" \
+        -F '#{@shipyard_main_pane}|#{pane_current_command}' 2>/dev/null |
+        sed -n 's/^1|//p' | head -n 1)"
+    case "$command" in
+        '' | claude | bash | zsh | sh | fish | dash | ksh | -*) return 1 ;;
+    esac
+    return 0
+}

@@ -138,6 +138,10 @@ watcher_subagent_activity() {
     local worktree="$2"
     local orchestrator_live=0
 
+    if agents_other_program_live "$window_id"; then
+        printf 'none\n'
+        return 0
+    fi
     agents_orchestrator_live "$window_id" && orchestrator_live=1
     agents_subagent_activity "$worktree" "$orchestrator_live"
 }

@@ -375,6 +375,23 @@ printf '{"type":"assistant","message":{"stop_reason":"end_turn"}}\n' \
 assert_equal "paused" "$(agents_subagent_activity "$agent_worktree" 1)" \
     "every work subagent finished means paused"
 
+agent_pane_command=codex
+original_tmux_fn="$(declare -f tmux)"
+tmux() {
+    if [[ "$1" == "list-panes" ]]; then
+        printf '1|%s\n' "$agent_pane_command"
+        return 0
+    fi
+    return 0
+}
+assert_equal "none" "$(watcher_subagent_activity "@1" "$agent_worktree")" \
+    "a stale Claude transcript is ignored while another agent owns the main pane"
+agent_pane_command=bash
+assert_equal "paused" "$(watcher_subagent_activity "@1" "$agent_worktree")" \
+    "unfinished subagents with Claude gone from an idle shell mean paused"
+unset -f tmux
+eval "$original_tmux_fn"
+
 agent_pr_states="$test_tmp/agent-pr-states"
 agent_pr_calls="$test_tmp/agent-pr-calls"
 : > "$agent_pr_calls"
