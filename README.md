@@ -176,9 +176,10 @@ agent's picker or provide its known ID, for example `codex resume`,
 | Badge | State | Source |
 | --- | --- | --- |
 | `💡` | Planning; awaiting explicit approval | `forge new` |
-| `●` | Building | Automatic |
+| `●` | Building, or an orchestrator's subagents are working | Automatic |
+| `⏸` | Orchestrator's subagents are all finished, stalled, or orphaned | Automatic |
 | `📝` | no-mistakes is running without a PR | Automatic |
-| yellow `📬` | PR published | Automatic |
+| yellow `📬` | PR published, or a product PR opened by the agent is open | Automatic |
 | red `🔔` | Agent blocked or validation failed | `forge alert` or automatic |
 | `🚢` | PR merged | Automatic |
 
@@ -198,6 +199,30 @@ or a worktree still detached at its leased commit, don't trigger it. Blocking
 remains explicit; validation, publication, failure, and merge are observed
 from no-mistakes and GitHub.
 
+### Orchestrator windows
+
+When the main pane runs Claude Code and its current session delegates work to
+subagents, the badge follows those subagents instead of the worktree. Shipyard
+reads the session's transcripts under
+`${CLAUDE_CONFIG_DIR:-~/.claude}/projects/<worktree-slug>/`:
+
+- Investigation, including read-only `Explore`, `Plan`, and `claude-code-guide`
+  helpers, stays `💡`.
+- Once any other subagent is spawned, the window shows `●` while at least one is
+  still running, and `⏸` when none are: every one finished its turn, went
+  quiet mid-turn for `SHIPYARD_SUBAGENT_STALL_SECONDS` (default 600), or its
+  orchestrator is no longer running. `⏸` is the cue to check what they're
+  blocked on.
+- A GitHub PR URL in the session's transcripts that belongs to the worktree's
+  `origin` repo, was created after the session started, and is still open
+  shows yellow `📬`, ahead of `●` and `⏸`. Once it's merged or closed the
+  badge falls back to subagent activity; it never becomes `🚢`, since the
+  window may still have more work queued.
+
+The window's own no-mistakes run, its PR, and `🔔` attention still take
+precedence over all of these. Other agents (Codex, Cursor Agent) keep the
+worktree-based behavior.
+
 While a run is active, the window watcher splits the upper main pane and gives
 one-third of that row to `no-mistakes attach`, so a human can watch the TUI
 without leaving the window. This placement is independent of which pane is
@@ -209,7 +234,7 @@ isn't already running (closed by hand, or its process exited).
 The status bar contains:
 
 ```text
-project   command   1:💡 intent-a   2:● intent-b       2026-10-22 00:53
+project   command   1:💡 intent-a   2:● intent-b   3:⏸ intent-c   2026-10-22 00:53
 ```
 
 - Left: the repo-named Yazi window, selectable like any other tmux window
@@ -304,6 +329,8 @@ when the normalizer rewrites a message are documented in
   wrapper (behavior: [AGENTS.md](AGENTS.md#git-commit-trailers)).
 - `lib/context.sh` maintains pane repository and branch context.
 - `lib/pipeline.sh` maps effective states to tmux badges.
+- `lib/agents.sh` reads Claude Code session transcripts to classify subagent
+  activity and find open product PRs the agent created.
 - `lib/watcher.sh` derives validation and PR states, snapshots the observed
   agent for restore hints, and flags a worktree's uncommitted-changes status
   for the status bar.

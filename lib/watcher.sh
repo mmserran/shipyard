@@ -130,6 +130,21 @@ watcher_ensure_attach_pane() {
     tmux set-option -p -t "$pane_id" @shipyard_attach_pane 1
 }
 
+# Orchestrator windows: once the current Claude session has delegated work to
+# subagents, their activity decides building vs. paused (see lib/agents.sh).
+# Unfinished subagents of an orchestrator that has exited aren't working.
+watcher_subagent_activity() {
+    local window_id="$1"
+    local worktree="$2"
+    local orchestrator_live=0
+
+    if agents_other_program_live "$window_id"; then
+        printf 'none\n'
+        return 0
+    fi
+    agents_orchestrator_live "$window_id" && orchestrator_live=1
+    agents_subagent_activity "$worktree" "$orchestrator_live"
+}
 
 # One 10-second poll cycle's worth of work. Split out of watcher_run so a
 # failure partway through -- a transient gh/tmux/no-mistakes hiccup, or any
@@ -150,6 +165,7 @@ watcher_poll() {
     local pr
     local pr_state
     local manual_state
+    local subagents
 
     shipyard_refresh_window_context "$window_id"
     shipyard_snapshot_agent "$window_id"
@@ -196,12 +212,23 @@ watcher_poll() {
         fi
     elif [[ "$run_status" == "running" ]]; then
         watcher_apply_state "$window_id" validating
-    elif [[ "$manual_state" != "planning" && -n "$manual_state" ]]; then
-        watcher_apply_state "$window_id" "$manual_state"
-    elif watcher_should_build "$window_id" "$worktree"; then
-        watcher_apply_state "$window_id" building
+    elif [[ -n "$(agents_open_pr "$worktree")" ]]; then
+        # A product PR opened by the orchestrator or one of its subagents is
+        # waiting on the human, which outranks work still in flight.
+        watcher_apply_state "$window_id" published
     else
-        watcher_apply_state "$window_id" planning
+        subagents="$(watcher_subagent_activity "$window_id" "$worktree")"
+        if [[ "$subagents" == "working" ]]; then
+            watcher_apply_state "$window_id" building
+        elif [[ "$subagents" == "paused" ]]; then
+            watcher_apply_state "$window_id" paused
+        elif [[ "$manual_state" != "planning" && -n "$manual_state" ]]; then
+            watcher_apply_state "$window_id" "$manual_state"
+        elif watcher_should_build "$window_id" "$worktree"; then
+            watcher_apply_state "$window_id" building
+        else
+            watcher_apply_state "$window_id" planning
+        fi
     fi
 }
 
