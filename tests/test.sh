@@ -19,6 +19,8 @@ cleanup() {
 trap cleanup EXIT
 
 export XDG_STATE_HOME="$test_tmp/state"
+# Keep the watcher off the real ~/.claude transcripts of whoever runs this.
+export CLAUDE_CONFIG_DIR="$test_tmp/claude"
 export TMUX="test"
 export SHIPYARD_HOME="$repo_root"
 export PATH="$test_tmp/bin:$PATH"
@@ -31,6 +33,8 @@ source "$repo_root/lib/hooks.sh"
 source "$repo_root/lib/pipeline.sh"
 # shellcheck source=../lib/session.sh
 source "$repo_root/lib/session.sh"
+# shellcheck source=../lib/agents.sh
+source "$repo_root/lib/agents.sh"
 # shellcheck source=../lib/watcher.sh
 source "$repo_root/lib/watcher.sh"
 # shellcheck source=../lib/screenshot.sh
@@ -326,6 +330,112 @@ assert_equal "published" \
 assert_equal "https://example.test/pull/1" \
     "$(tmux show-options -wqv @shipyard_pr)" \
     "watcher records PR URL"
+
+assert_equal " ⏸" "$(pipeline_badge_for paused)" "paused uses pause sign"
+
+# Subagent-driven badges for Claude orchestrator windows (lib/agents.sh).
+agent_worktree="$test_tmp/agent-worktree"
+git init -q "$agent_worktree"
+git -C "$agent_worktree" remote add origin https://github.com/example/product.git
+agent_session_dir="$(agents_project_dir "$agent_worktree")"
+assert_equal "$CLAUDE_CONFIG_DIR/projects/${agent_worktree//[^a-zA-Z0-9]/-}" \
+    "$agent_session_dir" "transcript dir uses Claude's cwd slug"
+assert_equal "example/product" "$(agents_github_repo "$agent_worktree")" \
+    "github repo is parsed from origin"
+assert_equal "none" "$(agents_subagent_activity "$agent_worktree" 1)" \
+    "no transcripts means no subagent activity"
+
+mkdir -p "$agent_session_dir/session-1/subagents"
+agent_transcript="$agent_session_dir/session-1.jsonl"
+agent_subagents="$agent_session_dir/session-1/subagents"
+printf '{"type":"mode"}\n{"type":"user","timestamp":"2026-10-07T10:00:00.000Z"}\n' \
+    > "$agent_transcript"
+assert_equal "none" "$(agents_subagent_activity "$agent_worktree" 1)" \
+    "a session without subagents is still investigating"
+
+printf '{"agentType":"Explore"}' > "$agent_subagents/agent-explore.meta.json"
+printf '{"type":"assistant","message":{"stop_reason":"tool_use"}}\n' \
+    > "$agent_subagents/agent-explore.jsonl"
+assert_equal "none" "$(agents_subagent_activity "$agent_worktree" 1)" \
+    "read-only Explore subagents don't count as work"
+
+printf '{"agentType":"claude"}' > "$agent_subagents/agent-work.meta.json"
+printf '{"type":"assistant","message":{"stop_reason":"tool_use"}}\n' \
+    > "$agent_subagents/agent-work.jsonl"
+assert_equal "working" "$(agents_subagent_activity "$agent_worktree" 1)" \
+    "an unfinished, recently written work subagent is working"
+assert_equal "paused" "$(agents_subagent_activity "$agent_worktree" 0)" \
+    "subagents of an exited orchestrator are not working"
+assert_equal "paused" \
+    "$(SHIPYARD_SUBAGENT_STALL_SECONDS=0 agents_subagent_activity "$agent_worktree" 1)" \
+    "an unfinished subagent that has gone quiet counts as stalled"
+
+printf '{"type":"assistant","message":{"stop_reason":"end_turn"}}\n' \
+    >> "$agent_subagents/agent-work.jsonl"
+assert_equal "paused" "$(agents_subagent_activity "$agent_worktree" 1)" \
+    "every work subagent finished means paused"
+
+agent_pr_states="$test_tmp/agent-pr-states"
+agent_pr_calls="$test_tmp/agent-pr-calls"
+: > "$agent_pr_calls"
+gh() {
+    if [[ "$1" == "pr" && "$2" == "view" ]]; then
+        printf '%s\n' "$3" >> "$agent_pr_calls"
+        grep -F "$3 " "$agent_pr_states" | cut -d ' ' -f 2-
+    fi
+}
+printf 'Opened https://github.com/example/product/pull/7 and read https://github.com/example/product/pull/2 and https://github.com/other/repo/pull/9\n' \
+    >> "$agent_subagents/agent-work.jsonl"
+cat > "$agent_pr_states" <<'STATES'
+https://github.com/example/product/pull/2 OPEN 2026-10-01T00:00:00Z
+https://github.com/example/product/pull/7 OPEN 2026-10-07T11:00:00Z
+STATES
+assert_equal "https://github.com/example/product/pull/7" \
+    "$(agents_open_pr "$agent_worktree")" \
+    "an open PR created during the session is reported"
+if grep -Fq "other/repo" "$agent_pr_calls"; then
+    printf 'not ok - PRs from other repos are ignored\n' >&2
+    exit 1
+fi
+printf 'ok - PRs from other repos are ignored\n'
+
+sed -i 's#pull/7 OPEN#pull/7 MERGED#' "$agent_pr_states"
+assert_equal "" "$(agents_open_pr "$agent_worktree")" \
+    "merged and pre-session PRs are not reported"
+: > "$agent_pr_calls"
+agents_open_pr "$agent_worktree" >/dev/null
+assert_equal "" "$(cat "$agent_pr_calls")" \
+    "settled PRs are cached and not looked up again"
+
+# watcher_poll: product PR > subagent activity > git-based detection.
+printf '{"type":"assistant","message":{"stop_reason":"end_turn"}}\n' \
+    >> "$agent_subagents/agent-work.jsonl"
+agent_window="$(tmux new-window -d -P -F '#{window_id}' -t testrepo -c "$agent_worktree")"
+watcher_no_mistakes_status() { :; }
+main_pane_list="1|claude"
+watcher_poll "$agent_window" "$agent_worktree"
+assert_equal "paused" "$(tmux show-options -wqv -t "$agent_window" @pipeline_state)" \
+    "watcher shows paused once all work subagents finished"
+assert_equal " ⏸" "$(tmux show-options -wqv -t "$agent_window" @pipeline_badge)" \
+    "paused window carries the pause badge"
+
+printf '{"type":"assistant","message":{"stop_reason":"tool_use"}}\n' \
+    >> "$agent_subagents/agent-work.jsonl"
+watcher_poll "$agent_window" "$agent_worktree"
+assert_equal "building" "$(tmux show-options -wqv -t "$agent_window" @pipeline_state)" \
+    "watcher shows building while a work subagent runs"
+
+printf 'https://github.com/example/product/pull/8\n' >> "$agent_subagents/agent-work.jsonl"
+printf 'https://github.com/example/product/pull/8 OPEN 2026-10-07T12:00:00Z\n' \
+    >> "$agent_pr_states"
+watcher_poll "$agent_window" "$agent_worktree"
+assert_equal "published" "$(tmux show-options -wqv -t "$agent_window" @pipeline_state)" \
+    "an open product PR wins over running subagents"
+
+main_pane_list=""
+unset -f gh watcher_no_mistakes_status
+source "$repo_root/lib/watcher.sh"
+tmux kill-window -t "$agent_window"
 
 : > "$test_tmp/split-window"
 attach_pane_tag=""
